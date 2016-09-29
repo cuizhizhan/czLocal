@@ -1,0 +1,375 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<ClassDiagram MajorVersion="1" MinorVersion="1">
+  <Class Name="MediaService.dbscarreturnUser" Collapsed="true">
+    <Position X="10" Y="0.5" Width="1.5" />
+    <TypeIdentifier>
+      <HashCode>AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAQAAAAAAA=</HashCode>
+      <FileName>Model\JsonClass.cs</FileName>
+    </TypeIdentifier>
+  </Class>
+  <Class Name="MediaService.UserLoginJson" Collapsed="true">
+    <Position X="15.25" Y="5.5" Width="1.5" />
+    <TypeIdentifier>
+      <HashCode>AAUAAIgAEACAMCAgCACAgAEAgAIAABAAAACAwAQAAQA=</HashCode>
+      <FileName>Model\JsonClass.cs</FileName>
+    </TypeIdentifier>
+  </Class>
+  <Class Name="MediaService.ErrorCodeJson" Collapsed="true">
+    <Position X="4.75" Y="1.5" Width="1.5" />
+    <TypeIdentifier>
+      <HashCode>AAQAAgAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=</HashCode>
+      <FileName>Model\JsonClass.cs</FileName>
+    </TypeIdentifier>
+  </Class>
+  <Class Name="MediaService.ErrorCodeJson_codelist" Collapsed="true">
+    <Position X="6.5" Y="1.5" Width="1.5" />
+    <TypeIdentifier>
+      <HashCode>AAAAAAAAAAAEAAAAAAAAAAAAAAAAAAAAAAQAAAAAAAA=</HashCode>
+      <FileName>Model\JsonClass.cs</FileName>
+    </TypeIdentifier>
+  </Class>
+  <Class Name="MediaService.UserListBaseMessageJson" Collapsed="true">
+    <Position X="13.5" Y="5.5" Width="1.5" />
+    <TypeIdentifier>
+      <HashCode>AAQAAgAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=</HashCode>
+      <FileName>Model\JsonClass.cs</FileName>
+    </TypeIdentifier>
+  </Class>
+  <Class Name="MediaService.UserBaseMessage" Collapsed="true">
+    <Position X="11.75" Y="5.5" Width="1.5" />
+    <TypeIdentifier>
+      <HashCode>AAAAACAAAAAAEAAAAAACgAEAAAAAAAAAAACAAAAAAQA=</HashCode>
+      <FileName>Model\JsonClass.cs</FileName>
+    </TypeIdentifier>
+  </Class>
+  <Class Name="MediaService.TalkListBaseMessageJson" Collapsed="true">
+    <Position X="11.75" Y="4.5" Width="1.5" />
+    <TypeIdentifier>
+      <HashCode>AAQAAgAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=</HashCode>
+      <FileName>Model\JsonClass.cs</FileName>
+    </TypeIdentifier>
+  </Class>
+  <Class Name="MediaService.TalkBaseMessage" Collapsed="true">
+    <Position X="10" Y="4.5" Width="1.5" />
+    <TypeIdentifier>
+      <HashCode>AAAAIAAAAAAAIAAAAAAACAAAAAAEAAAAAAAAABAAAAA=</HashCode>
+      <FileName>Model\JsonClass.cs</FileName>
+    </TypeIdentifier>
+  </Class>
+  <Class Name="MediaService.UserLoginWebJson" Collapsed="true">
+    <Position X="3" Y="6.5" Width="1.5" />
+    <TypeIdentifier>
+      <HashCode>AAUAAAAAAAAAEAAgAAAAgAEAAAAAAAAAAAAAggAAAQA=</HashCode>
+      <FileName>Model\JsonClass.cs</FileName>
+    </TypeIdentifier>
+  </Class>
+  <Class Name="MediaService.TalkState" Collapsed="true">
+    <Position X="8.25" Y="5.5" Width="1.5" />
+    <TypeIdentifier>
+      <HashCode>AAAAQAAAAAAAAACEAAAAAAAAAAAAAAAAAAAABAAAAAA=</HashCode>
+      <FileName>Model\TalkState.cs</FileName>
+    </TypeIdentifier>
+  </Class>
+  <Class Name="MediaService.CommAction" Collapsed="true">
+    <Position X="4.75" Y="0.5" Width="1.5" />
+    <TypeIdentifier>
+      <HashCode>AAAAAAAQAAAAAAAIAAAAAAAAAAQAAAAAAAAAAAAAAAA=</HashCode>
+      <FileName>Business\CommAction.cs</FileName>
+    </TypeIdentifier>
+  </Class>
+  <Class Name="MediaService.CommBusiness" Collapsed="true">
+    <Position X="6.5" Y="0.5" Width="1.5" />
+    <TypeIdentifier>
+      <HashCode>IogcYIHvMZTHwY2cSpBgVVVFZ1GKIBV2PQKcIlhgVBs=</HashCode>
+      <FileName>Business\CommBusiness.cs</FileName>
+    </TypeIdentifier>
+  </Class>
+  <Class Name="MediaService.CommType" Collapsed="true">
+    <Position X="8.25" Y="0.5" Width="1.5" />
+    <TypeIdentifier>
+      <HashCode>s5MkxgKJjODAbHZZd0GGNFpwEEAcBR4E6yRlkjBChGA=</HashCode>
+      <FileName>Business\CommType.cs</FileName>
+    </TypeIdentifier>
+  </Class>
+  <Class Name="MediaService.DianZanAmountInfo" Collapsed="true">
+    <Position X="0.5" Y="0.5" Width="1.5" />
+    <TypeIdentifier>
+      <HashCode>AAARAAAAAAAAMAAEBABAAAAAAAAIAAAAAAAAAAAAAAA=</HashCode>
+      <FileName>Business\DianZan\DianZanAmountInfo.cs</FileName>
+    </TypeIdentifier>
+  </Class>
+  <Class Name="MediaService.QueryDianZanAmountInfo" Collapsed="true">
+    <Position X="0.5" Y="1.75" Width="1.5" />
+    <TypeIdentifier>
+      <HashCode>AAAAAAAAAAAAAAIEAAAAAAAAAAAAAAAAAAAAAAAAAAA=</HashCode>
+      <FileName>Business\DianZan\DianZanAmountInfo.cs</FileName>
+    </TypeIdentifier>
+  </Class>
+  <Class Name="MediaService.DianZanTimer" Collapsed="true">
+    <Position X="13.5" Y="0.5" Width="1.5" />
+    <TypeIdentifier>
+      <HashCode>AAAAAAAAACAAAAAAAoAEAAAAAAgAAAAAYAAAACAEAAA=</HashCode>
+      <FileName>Business\DianZan\DianZanTimer.cs</FileName>
+    </TypeIdentifier>
+  </Class>
+  <Class Name="MediaService.DZAmountManger" Collapsed="true">
+    <Position X="3" Y="1.5" Width="1.5" />
+    <TypeIdentifier>
+      <HashCode>AAAGQIAAQAAAAAAAAkUEQQCCAAAAAAAAUAAAAAAABAg=</HashCode>
+      <FileName>Business\DianZan\DZAmountManger.cs</FileName>
+    </TypeIdentifier>
+  </Class>
+  <Class Name="MediaService.DZAmount" Collapsed="true">
+    <Position X="15.25" Y="0.5" Width="1.5" />
+    <TypeIdentifier>
+      <HashCode>AAABAAAAAAAAAAAAAABAAAAAAAAAAAAAAAAAAAAAAAA=</HashCode>
+      <FileName>Business\DianZan\DZAmountManger.cs</FileName>
+    </TypeIdentifier>
+  </Class>
+  <Class Name="MediaService.QueryDianZaninfo" Collapsed="true">
+    <Position X="15.25" Y="3.5" Width="1.5" />
+    <TypeIdentifier>
+      <HashCode>AAAAAAAAAAAAAAAAAABAAAAAAAAAAAAAAAAAAAAAAAA=</HashCode>
+      <FileName>Business\DianZan\QueryDianZaninfo.cs</FileName>
+    </TypeIdentifier>
+  </Class>
+  <Class Name="MediaService.GoloZAction" Collapsed="true">
+    <Position X="11.75" Y="1.5" Width="1.5" />
+    <TypeIdentifier>
+      <HashCode>AAAAAAAAAAAAAAAAAAAAIAAAAAAAAAAAAAAAAAAAAAA=</HashCode>
+      <FileName>Business\Http\GoloZAction.cs</FileName>
+    </TypeIdentifier>
+  </Class>
+  <Class Name="MediaService.GoloZVehicleAction" Collapsed="true">
+    <Position X="13.5" Y="1.5" Width="1.5" />
+    <TypeIdentifier>
+      <HashCode>ABAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=</HashCode>
+      <FileName>Business\Http\GoloZVehicleAction.cs</FileName>
+    </TypeIdentifier>
+  </Class>
+  <Class Name="MediaService.HttpAction" Collapsed="true">
+    <Position X="15.25" Y="1.5" Width="1.5" />
+    <TypeIdentifier>
+      <HashCode>AYAAACAAAAAAAAAAAAAAAAgAEAAAAAAAAAAABAAAAQA=</HashCode>
+      <FileName>Business\Http\HttpAction.cs</FileName>
+    </TypeIdentifier>
+  </Class>
+  <Class Name="MediaService.HttpGoloBusiness" Collapsed="true">
+    <Position X="3" Y="2.5" Width="1.5" />
+    <TypeIdentifier>
+      <HashCode>AAAEAAAAAAAAgAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=</HashCode>
+      <FileName>Business\Http\HttpGoloBusiness.cs</FileName>
+    </TypeIdentifier>
+  </Class>
+  <Class Name="MediaService.KFUserObject" Collapsed="true">
+    <Position X="8.25" Y="3.5" Width="1.5" />
+    <TypeIdentifier>
+      <HashCode>AAABACAAAAAAAAAAAAAAAAUAAAAAAAAAAAAAAAAAAAA=</HashCode>
+      <FileName>Business\Http\HttpKfBusiness.cs</FileName>
+    </TypeIdentifier>
+  </Class>
+  <Class Name="MediaService.HttpKfBusiness" Collapsed="true">
+    <Position X="4.75" Y="2.5" Width="1.5" />
+    <TypeIdentifier>
+      <HashCode>QQAAAAAAACAAAAAQACAACAIAAAAAAAIgAAAAAIggAQA=</HashCode>
+      <FileName>Business\Http\HttpKfBusiness.cs</FileName>
+    </TypeIdentifier>
+  </Class>
+  <Class Name="MediaService.HttpService" Collapsed="true">
+    <Position X="6.5" Y="2.5" Width="1.5" />
+    <TypeIdentifier>
+      <HashCode>AAAAAAAAAAAAAAAAEBAAAAAAAAAAAAAgAAAAAAAAEAA=</HashCode>
+      <FileName>Business\Http\HttpService.cs</FileName>
+    </TypeIdentifier>
+  </Class>
+  <Class Name="MediaService.HttpSysBusiness" Collapsed="true">
+    <Position X="8.25" Y="2.5" Width="1.5" />
+    <TypeIdentifier>
+      <HashCode>BYkAAAAAgAKAAOAAKIAkBACAAFAQAAhAIoBAAJQgxAA=</HashCode>
+      <FileName>Business\Http\HttpSysBusiness.cs</FileName>
+    </TypeIdentifier>
+  </Class>
+  <Class Name="MediaService.HttpUserBusiness" Collapsed="true">
+    <Position X="10" Y="2.5" Width="1.5" />
+    <TypeIdentifier>
+      <HashCode>EAAAAAAAAAAAAAAAAAAAAgAAAAAAEAAAAAAAAAAABAA=</HashCode>
+      <FileName>Business\Http\HttpUserBusiness.cs</FileName>
+    </TypeIdentifier>
+  </Class>
+  <Class Name="MediaService.HttpWifiBusiness" Collapsed="true">
+    <Position X="11.75" Y="2.5" Width="1.5" />
+    <TypeIdentifier>
+      <HashCode>EAAAABAAAAAAgAAAAAAAAAAAABAAEABAAIBAAAQABAA=</HashCode>
+      <FileName>Business\Http\HttpWifiBusiness.cs</FileName>
+    </TypeIdentifier>
+  </Class>
+  <Class Name="MediaService.HttpZGoloBusiness" Collapsed="true">
+    <Position X="13.5" Y="2.5" Width="1.5" />
+    <TypeIdentifier>
+      <HashCode>MAACgkQQQYABgILQKF0UAUQCJkOogIFpBADKgDAAAAA=</HashCode>
+      <FileName>Business\Http\HttpZGoloBusiness.cs</FileName>
+    </TypeIdentifier>
+  </Class>
+  <Class Name="MediaService.HttpZGoloVehicleBusiness" Collapsed="true">
+    <Position X="15.25" Y="2.5" Width="1.5" />
+    <TypeIdentifier>
+      <HashCode>BAEAAAAAAAAAAAAAAAAEAAQCAAACAAAAAAAAAAAAAAQ=</HashCode>
+      <FileName>Business\Http\HttpZGoloVehicleBusiness.cs</FileName>
+    </TypeIdentifier>
+  </Class>
+  <Class Name="MediaService.IphoneMessagePush" Collapsed="true">
+    <Position X="4.75" Y="3.5" Width="1.5" />
+    <TypeIdentifier>
+      <HashCode>AAAAAAAAAAAAEAAAAAAAAAAABAAAAACAAAAAAAAAAAE=</HashCode>
+      <FileName>Business\IphoneMessagePush.cs</FileName>
+    </TypeIdentifier>
+  </Class>
+  <Class Name="MediaService.IosSend" Collapsed="true">
+    <Position X="3" Y="3.5" Width="1.5" />
+    <TypeIdentifier>
+      <HashCode>AAAAAAAAAAAAAIAAAAAAAAAAAAAAAAAAAAAAABQAACA=</HashCode>
+      <FileName>Business\IphoneMessagePush.cs</FileName>
+    </TypeIdentifier>
+  </Class>
+  <Class Name="MediaService.PublicClass" Collapsed="true">
+    <Position X="13.5" Y="3.5" Width="1.5" />
+    <TypeIdentifier>
+      <HashCode>IAEAQAAAAoAAAAAAAAAAEAAAABAAAgBAAgBgAAQAAIA=</HashCode>
+      <FileName>Business\PublicClass.cs</FileName>
+    </TypeIdentifier>
+  </Class>
+  <Class Name="MediaService.TalkMessage" Collapsed="true">
+    <Position X="13.5" Y="4.5" Width="1.5" />
+    <TypeIdentifier>
+      <HashCode>AAAAAIAAAAAAAEAAAAAAAAAAAAAECAgAAAAECBIAAAA=</HashCode>
+      <FileName>Business\PublicClass.cs</FileName>
+    </TypeIdentifier>
+  </Class>
+  <Class Name="MediaService.RadioObject" Collapsed="true">
+    <Position X="3" Y="4.5" Width="1.5" />
+    <TypeIdentifier>
+      <HashCode>AAAAIAAAAAAAAAIAAAAgAAAAAEAAAQCKAAIAABBAAEA=</HashCode>
+      <FileName>Business\PublicClass.cs</FileName>
+    </TypeIdentifier>
+  </Class>
+  <Class Name="MediaService.FujinTalk" Collapsed="true">
+    <Position X="8.25" Y="1.5" Width="1.5" />
+    <TypeIdentifier>
+      <HashCode>AAAAIAAAAAAAAAAAAAAACAAAAAAAAAAAAAAAAAIAAAA=</HashCode>
+      <FileName>Business\PublicClass.cs</FileName>
+    </TypeIdentifier>
+  </Class>
+  <Class Name="MediaService.TalkMessagePush" Collapsed="true">
+    <Position X="15.25" Y="4.5" Width="1.5" />
+    <TypeIdentifier>
+      <HashCode>AAAAAABAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=</HashCode>
+      <FileName>Business\TalkMessagePush.cs</FileName>
+    </TypeIdentifier>
+  </Class>
+  <Class Name="MediaService.TalkSend" Collapsed="true">
+    <Position X="6.5" Y="5.5" Width="1.5" />
+    <TypeIdentifier>
+      <HashCode>AAAAAAAAAAAAIAAAAAAAAAAQAAAAAACAAAAAABQAACA=</HashCode>
+      <FileName>Business\TalkMessagePush.cs</FileName>
+    </TypeIdentifier>
+  </Class>
+  <Class Name="MediaService.TalkRecordDic" Collapsed="true">
+    <Position X="3" Y="5.5" Width="1.5" />
+    <TypeIdentifier>
+      <HashCode>AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=</HashCode>
+      <FileName>Business\TalkRecordManager.cs</FileName>
+    </TypeIdentifier>
+  </Class>
+  <Class Name="MediaService.TalkRecordManager" Collapsed="true">
+    <Position X="4.75" Y="5.5" Width="1.5" />
+    <TypeIdentifier>
+      <HashCode>AAAAAABAAAAEAAAAAgAOAQAAAAACAAAAQAAAAAAAAAA=</HashCode>
+      <FileName>Business\TalkRecordManager.cs</FileName>
+    </TypeIdentifier>
+  </Class>
+  <Class Name="MediaService.DescriptAttribute" Collapsed="true">
+    <Position X="11.75" Y="0.5" Width="1.5" />
+    <TypeIdentifier>
+      <HashCode>AAAAAAAAAAAAAAEAAAAAAAAAAAAAAAAAAAAAAAAAAAA=</HashCode>
+      <FileName>Model\DescriptAttribute.cs</FileName>
+    </TypeIdentifier>
+  </Class>
+  <Class Name="MediaService.GetAttribute" Collapsed="true">
+    <Position X="10" Y="1.5" Width="1.5" />
+    <TypeIdentifier>
+      <HashCode>AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAQAAAAAAAAAAA=</HashCode>
+      <FileName>Common\GetEnumValueDescript.cs</FileName>
+    </TypeIdentifier>
+  </Class>
+  <Class Name="MediaService.JsonHelper" Collapsed="true">
+    <Position X="6.5" Y="3.5" Width="1.5" />
+    <TypeIdentifier>
+      <HashCode>AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAQAAAAAAA=</HashCode>
+      <FileName>Common\JsonHelper.cs</FileName>
+    </TypeIdentifier>
+  </Class>
+  <Class Name="MediaService.MessageCodeDiscription" Collapsed="true">
+    <Position X="10" Y="3.5" Width="1.5" />
+    <TypeIdentifier>
+      <HashCode>QAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAEAACAAAA=</HashCode>
+      <FileName>Common\MessageCodeDiscription.cs</FileName>
+    </TypeIdentifier>
+  </Class>
+  <Class Name="MediaService.MessageFormat" Collapsed="true">
+    <Position X="11.75" Y="3.5" Width="1.5" />
+    <TypeIdentifier>
+      <HashCode>AAAAAAAAAAAAAAAAAAAAAAAAIAAAAAAAAAQQAAAAAAA=</HashCode>
+      <FileName>Model\MessageFormat.cs</FileName>
+    </TypeIdentifier>
+  </Class>
+  <Class Name="MediaService.SocketServer" Collapsed="true">
+    <Position X="6.5" Y="4.5" Width="1.5" />
+    <TypeIdentifier>
+      <HashCode>IAAAAAAAACAAAAAQAAAAAQCAAQCAAAAAKEADCAAEEFA=</HashCode>
+      <FileName>Common\SocketServer.cs</FileName>
+    </TypeIdentifier>
+  </Class>
+  <Class Name="MediaService.AsyncUserToken" Collapsed="true">
+    <Position X="3" Y="0.5" Width="1.5" />
+    <TypeIdentifier>
+      <HashCode>AAAAAAAAAACAEAEIAAAAAAAAAAAAAQEAAABAQAQAAQA=</HashCode>
+      <FileName>Common\SocketServer.cs</FileName>
+    </TypeIdentifier>
+  </Class>
+  <Class Name="MediaService.UserObject" Collapsed="true">
+    <Position X="4.75" Y="6.5" Width="1.5" />
+    <TypeIdentifier>
+      <HashCode>AAEAIAAAACAEgAAAAAAACAAAAAAAAAEAAAEgAACAAQA=</HashCode>
+      <FileName>Common\SocketServer.cs</FileName>
+    </TypeIdentifier>
+  </Class>
+  <Class Name="MediaService.SocketAsyncEventArgsPool" Collapsed="true">
+    <Position X="4.75" Y="4.5" Width="1.5" />
+    <TypeIdentifier>
+      <HashCode>AAAAAAAAAAAAAAAAAAAAAAQAAACAAAAAAAABAAAACAA=</HashCode>
+      <FileName>Common\SocketServer.cs</FileName>
+    </TypeIdentifier>
+  </Class>
+  <Class Name="MediaService.SqlHelper" Collapsed="true">
+    <Position X="8.25" Y="4.5" Width="1.5" />
+    <TypeIdentifier>
+      <HashCode>AAAAAAAAAAAAAAgAABAAAEAAAAAAAAABAAAAAAAAAAA=</HashCode>
+      <FileName>Common\SqlHelper.cs</FileName>
+    </TypeIdentifier>
+  </Class>
+  <Class Name="MediaService.UdpServer" Collapsed="true">
+    <Position X="10" Y="5.5" Width="1.5" />
+    <TypeIdentifier>
+      <HashCode>AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAgAAAAAAAAAI=</HashCode>
+      <FileName>Common\UdpServer.cs</FileName>
+    </TypeIdentifier>
+  </Class>
+  <Enum Name="MediaService.MessageCode" Collapsed="true">
+    <Position X="3" Y="7.75" Width="1.5" />
+    <TypeIdentifier>
+      <HashCode>EoAKBCgEACCgAABAAQAIAAAAAhAAAMEgAAAIAEAAAgA=</HashCode>
+      <FileName>Model\MessageCode.cs</FileName>
+    </TypeIdentifier>
+  </Enum>
+  <Font Name="微软雅黑" Size="9" />
+</ClassDiagram>

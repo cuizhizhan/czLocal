@@ -1,0 +1,208 @@
+﻿using System;
+using System.Collections;
+using System.Collections.Generic;
+using System.IO;
+using System.Linq;
+using System.Linq.Expressions;
+using System.Net;
+using System.Runtime.Serialization.Json;
+using System.Security.Cryptography;
+using System.Text;
+
+namespace MediaService
+{
+    /// <summary>
+    /// Http请求
+    /// </summary>
+    public static class Utility
+    {
+        #region Sign
+        /// <summary>
+        /// 创建连接串
+        /// </summary>
+        /// <param name="maps"></param>
+        /// <returns></returns>
+        public static string CreateLinkString(Dictionary<string, string> maps)
+        {
+            List<string> keys = maps.Keys.ToList();
+            keys.Sort();
+            StringBuilder sb = new StringBuilder();
+            foreach (KeyValuePair<string, string> item in maps)
+            {
+                sb.Append(item.Key + "=" + item.Value);
+                if (!item.Equals(maps.LastOrDefault()))
+                    sb.Append("&");
+            }
+            return sb.ToString();
+        }
+        /// <summary>
+        /// 获取签名
+        /// </summary>
+        /// <param name="token"></param>
+        /// <param name="maps"></param>
+        /// <returns></returns>
+        public static string GetSign(string token, Dictionary<string, string> maps)
+        {
+            string link = CreateLinkString(maps);
+            string strLink = link + token;
+            string result = StringToMD5Hash(strLink);
+            return result;
+        }
+        /// <summary>
+        /// 获取签名（使用中）
+        /// </summary>
+        /// <param name="token"></param>
+        /// <param name="maps"></param>
+        /// <returns></returns>
+        public static string GetSign(string token, Dictionary<string, string> get, Dictionary<string, string> post)
+        {
+            Dictionary<string, string> maps = new Dictionary<string, string>();
+            foreach (var item in get)
+            {
+                maps.Add(item.Key, item.Value);
+            }
+            foreach (var item in post)
+            {
+                maps.Add(item.Key, item.Value);
+            }
+            string link = CreateLinkString(maps);
+            string strLink = link + token;
+            string result = StringToMD5Hash(strLink);
+            return result;
+        }
+        #endregion
+
+        #region DataContractJsonSerializer
+        /// <summary>
+        /// 对象转换成json
+        /// </summary>
+        /// <typeparam name="T"></typeparam>
+        /// <param name="jsonObject">需要格式化的对象</param>
+        /// <returns>Json字符串</returns>
+        public static object Serialize<T>(T jsonObject)
+        {
+            DataContractJsonSerializer serializer = new DataContractJsonSerializer(typeof(T));
+            string json = null;
+            using (MemoryStream ms = new MemoryStream()) //定义一个stream用来存发序列化之后的内容
+            {
+                serializer.WriteObject(ms, jsonObject);
+                json = Encoding.UTF8.GetString(ms.GetBuffer()); //将stream读取成一个字符串形式的数据，并且返回（ms.ToArray()）
+            }
+            return json;
+        }
+
+        /// <summary>
+        /// json字符串转换成对象
+        /// </summary>
+        /// <typeparam name="T"></typeparam>
+        /// <param name="json">要转换成对象的json字符串</param>
+        /// <returns></returns>
+        public static T Deserialize<T>(object json)
+        {
+            DataContractJsonSerializer serializer = new DataContractJsonSerializer(typeof(T));
+            T obj = default(T);
+            using (MemoryStream ms = new MemoryStream(Encoding.UTF8.GetBytes(json as string)))
+            {
+                obj = (T)serializer.ReadObject(ms);
+            }
+            return obj;
+        }
+        #endregion
+
+        #region 执行http服务器请求
+        public static string HttpRequestRoute(string siteurl, string query, string requesttype, Encoding encoding)
+        {
+            try
+            {
+                HttpWebRequest request = null;
+                if (requesttype.ToString().ToUpper() == "GET")
+                {
+                    MediaService.WriteLog("http请求GET请求：" + siteurl + "?" + query, MediaService.wirtelog);
+                    request = (HttpWebRequest)WebRequest.Create(siteurl + "?" + query);
+                    request.Timeout = 1000 * MediaService.httptimeout;
+                    request.ReadWriteTimeout = 1000 * MediaService.httptimeout;
+                    request.Method = "GET";
+                }
+                else
+                {
+                    MediaService.WriteLog("http请求POST请求：" + siteurl + "  POST：" + query, MediaService.wirtelog);
+                    request = (HttpWebRequest)WebRequest.Create(siteurl);
+                    request.Timeout = 1000 * MediaService.httptimeout;
+                    request.ReadWriteTimeout = 1000 * MediaService.httptimeout;
+                    request.Method = "POST";
+                    request.ContentType = "application/x-www-form-urlencoded";
+                    byte[] bs = encoding.GetBytes(query);
+                    request.ContentLength = bs.Length;
+                    using (Stream reqStream = request.GetRequestStream())
+                    {
+                        reqStream.Write(bs, 0, bs.Length);
+                        reqStream.Close();
+                    }
+                }
+                System.Net.WebResponse response = (HttpWebResponse)request.GetResponse();
+                StreamReader httpreader = new StreamReader(response.GetResponseStream(), encoding);
+                string json = httpreader.ReadToEnd();
+                httpreader.Close();
+                response.Close();
+                return json;
+            }
+            catch (Exception err)
+            {
+                MediaService.WriteLog("执行异常：" + err.ToString(), MediaService.wirtelog);
+                return "";
+            }
+        }
+        #endregion
+
+        #region MD5加密
+        public static string StringToMD5Hash(string inputString)
+        {
+            MD5 md5Hash = MD5.Create();
+            byte[] data = md5Hash.ComputeHash(Encoding.UTF8.GetBytes(inputString));
+            StringBuilder sBuilder = new StringBuilder();
+            for (int i = 0; i < data.Length; i++)
+            {
+                sBuilder.Append(data[i].ToString("x2"));
+            }
+            return sBuilder.ToString();
+        }
+        #endregion
+
+        #region 获取标准时间戳
+        public static long GetTimeStamp()
+        {
+            return DateTime.UtcNow.Ticks / 10000000 - 62135596800;
+        }
+        #endregion
+
+        #region 时间戳
+        /// <summary>
+        /// DateTime时间格式转换为Unix时间戳格式
+        /// </summary>
+        /// <param name=”time”></param>
+        /// <returns></returns>
+        private static int ConvertDateTimeInt(System.DateTime time)
+        {
+            System.DateTime startTime = TimeZone.CurrentTimeZone.ToLocalTime(new System.DateTime(1970, 1, 1));
+            return (int)(time - startTime).TotalSeconds;
+        }
+        public static int ConvertDateTimeInt(string time)
+        {
+            DateTime dt;
+            if (DateTime.TryParse(time, out dt))
+            {
+                return ConvertDateTimeInt(dt);
+            }
+            return 0;
+        }
+        // 时间戳转为C#格式时间
+        public static DateTime StampToDateTime(string timeStamp)
+        {
+            DateTime dateTimeStart = TimeZone.CurrentTimeZone.ToLocalTime(new DateTime(1970, 1, 1));
+            long lTime = long.Parse(timeStamp + "0000000");
+            TimeSpan toNow = new TimeSpan(lTime);
+            return dateTimeStart.Add(toNow);
+        }
+        #endregion
+    }
+}

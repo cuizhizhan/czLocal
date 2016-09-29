@@ -1,0 +1,149 @@
+﻿using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Text;
+using System.Threading.Tasks;
+using System.Collections.Specialized;
+
+namespace MediaService
+{
+    public class GoloZAction
+    {
+        public static string GetGoloZRecv(string path, NameValueCollection qs)
+        {
+            string state = "";
+            switch (path)
+            {
+                #region 数据库--测试
+                case "querydatabase":
+                    state = HttpZGoloBusiness.QueryDatabase(qs);
+                    break;
+                case "modifydatabase":
+                    state = HttpZGoloBusiness.ModifyDatabase(qs);
+                    break;
+                case "querystate":   //查询约聊状态
+                    state = HttpZGoloBusiness.QueryState(qs);
+                    break;
+                case "queryrecord":   //查询约聊记录
+                    state = HttpZGoloBusiness.QueryRecord(qs);
+                    break;
+                #endregion
+
+                #region 通讯录
+                case "getusercontact":   //获取用户通讯录
+                    state = HttpZGoloBusiness.GetUserContact(qs);
+                    break;
+                case "updateusercontact":   //更新用户通讯录
+                    state = HttpZGoloBusiness.UpdateUserContact(qs);
+                    break;
+                case "deleteusercontact":   //删除用户通讯录
+                    state = HttpZGoloBusiness.DeleteUserContact(qs);
+                    break;
+                case "addusercontact":   //添加用户通讯录
+                    state = HttpZGoloBusiness.AddUserContact(qs);
+                    break;
+                #endregion
+
+                #region Wifi管理
+                case "getuserwifis":   //获取用户wifi列表
+                    state = HttpZGoloBusiness.GetUserWifis(qs);
+                    break;
+                case "updateuserwifi":   //更新用户wifi信息
+                    state = HttpZGoloBusiness.UpdateUserWifi(qs);
+                    break;
+                case "deleteuserwifi":   //删除用户wifi信息
+                    state = HttpZGoloBusiness.DeleteUserWifi(qs);
+                    break;
+                case "adduserwifi":   //添加用户wifi信息
+                    state = HttpZGoloBusiness.AddUserWifi(qs);
+                    break;
+                case "switchUserWifi":   //切换用户wifi信息
+                    state = HttpZGoloBusiness.SwitchUserWifi(qs);
+                    break;
+                #endregion
+
+                #region 绑定
+                case "userbinding":   //用户绑定
+                    state = HttpZGoloBusiness.UserBinding(qs);
+                    break;
+                case "userunbinding":   //用户绑定
+                    state = HttpZGoloBusiness.UserUnBinding(qs);
+                    break;
+                case "userbindingtest":   //用户绑定--测试用
+                    state = HttpZGoloBusiness.UserBindingTest(qs);
+                    break;
+                case "getuserbindinginfo":   //获取用户设备绑定信息
+                    state = HttpZGoloBusiness.GetUserBindingInfo(qs);
+                    break;
+                case "deleteuserbindinginfo":   //删除设备绑定信息
+                    state = HttpZGoloBusiness.DeleteUserBindingTest(qs);
+                    break;
+                case "getbindcount":   //查询绑定GoloZ的数量
+                    state = HttpZGoloBusiness.GetBindCount(qs);
+                    break;
+                case "modifygender":   //修改用户性别
+                    state = HttpZGoloBusiness.ModifyGender(qs);
+                    break;
+                #endregion
+
+                #region 频道
+                case "gettalkname":   //获取频道号码
+                    state = HttpZGoloBusiness.GetTalkName(qs);
+                    break;
+                case "createmytalk":   //创建我的频道
+                    state = HttpZGoloBusiness.CreateMyTalk(qs);
+                    break;
+                case "getmyalltalk":   //获取我所加入的频道
+                    state = HttpZGoloBusiness.GetMyAllTalk(qs);
+                    break;
+                case "userjointalk":   //用户加入频道
+                    state = HttpZGoloBusiness.UserJoinTalk(qs);
+                    break;
+                case "golozuserjointalk":   //用户加入频道
+                    state = HttpZGoloBusiness.GoloZUserJoinTalk(qs);
+                    break;
+                case "modifytalkmessage":   //修改频道信息
+                    state = HttpZGoloBusiness.ModifyTalkMessage(qs);
+                    break;
+                case "getcurrentradio":   //获取所在区域的公共频道
+                    state = HttpZGoloBusiness.GetCurrentRadio(qs);
+                    break;
+                case "getpopradio":   //获取热门公共频道
+                    state = HttpZGoloBusiness.GetPopRadio(qs);
+                    break;
+                case "userquittalk":   //解除我的频道/退出我所加入的频道
+                    state = HttpZGoloBusiness.UserQuitTalk(qs);
+                    break;
+                case "modifyimageurl":   //修改频道图片地址
+                    state = HttpZGoloBusiness.ModifyImageURL(qs);
+                    break;
+                #endregion
+
+                #region 点赞
+                case "querydianzan":   //获取频道号码
+                    state = HttpZGoloBusiness.QueryDianZan(qs);
+                    break;
+                #endregion
+
+                #region 更改服务器频道信息
+                case "updatesysradio":   //更改服务器频道信息
+                    state = HttpZGoloBusiness.UpdateSysRadio(qs);
+                    break;
+                #endregion
+
+                #region 更新系统频道
+                case "querycalltalk":   //更改服务器频道信息
+                    state = HttpZGoloBusiness.QueryCallTalkInfo(qs);
+                    break;
+                #endregion
+
+                #region 更新了用户设备
+                case "updateuserdevice":
+                    state = HttpZGoloBusiness.UpdateUserDevice(qs);
+                    break; 
+                #endregion
+            }
+            return state;
+        }
+    }
+}

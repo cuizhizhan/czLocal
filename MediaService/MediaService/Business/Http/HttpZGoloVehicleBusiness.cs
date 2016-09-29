@@ -1,0 +1,325 @@
+﻿using System;
+using System.Collections.Generic;
+using System.Collections.Specialized;
+using System.Data;
+using System.Linq;
+using System.Text;
+using System.Threading.Tasks;
+
+namespace MediaService
+{
+    public static class HttpZGoloVehicleBusiness
+    {
+        #region
+
+        #region Ip验证
+        private static bool IsIpVerificationSucceed(string ip)
+        {
+            return true;
+        }
+        #endregion
+
+
+        #region 获取频道号码
+        /// <summary>
+        /// 获取频道号码
+        /// </summary>
+        /// <param name="qs"></param>
+        /// <returns></returns>
+        public static string GetTalkName(NameValueCollection qs)
+        {
+            /* NameValueCollection 值列表
+             * ip
+             */
+
+            string recv = CommFunc.StandardFormat(MessageCode.MissKey);
+            if (qs == null || qs["ip"] == null)
+            {
+                MediaService.WriteLog("接收到获取频道号码 ：" + recv, MediaService.wirtelog);
+                return recv;
+            }
+            try
+            {
+                MediaService.WriteLog("接收到获取频道号码 ：ip =" + qs["ip"].ToString(), MediaService.wirtelog);
+
+                string ip = qs["ip"].ToString();
+                if (!IsIpVerificationSucceed(ip))
+                    return CommFunc.StandardFormat(MessageCode.IPVerifiFailed);
+
+                string talkname = null;
+                string verifi = null;
+                if (HttpZGoloBusiness.GetTalkName(ref talkname, ref verifi))
+                {
+                    string data = "{\"talkname\":\"" + talkname + "\",\"verification\":\"" + verifi + "\"}";
+                    recv = CommFunc.StandardObjectFormat(MessageCode.Success, data);
+                }
+                else
+                {
+                    recv = CommFunc.StandardFormat(MessageCode.TalkAllocationFaild);
+                }
+                return recv;
+            }
+            catch (Exception e)
+            {
+                return CommFunc.StandardFormat(MessageCode.DefaultError, e.Message);
+            }
+        }
+        #endregion
+
+        #region 创建车群组
+        /// <summary>
+        /// 创建车群组
+        /// </summary>
+        /// <param name="qs"></param>
+        /// <returns></returns>
+        public static string CreateGroup(NameValueCollection qs)
+        {
+            /* NameValueCollection 值列表
+             * ip,sn,talkname,verification,[info],[auth],[imageurl],[sn] //sn可不传
+             */
+
+            string recv = CommFunc.StandardFormat(MessageCode.MissKey);
+            if (qs == null || qs["ip"] == null || qs["sn"] == null || qs["talkname"] == null && qs["verification"] == null)
+            {
+                MediaService.WriteLog("接收到创建车群组 ：" + recv, MediaService.wirtelog);
+                return recv;
+            }
+            try
+            {
+                MediaService.WriteLog("接收到创建车群组 ：ip =" + qs["ip"].ToString() + "&sn =" + qs["sn"].ToString() + "&talkname =" + qs["talkname"].ToString() + "&verification =" + qs["verification"].ToString(), MediaService.wirtelog);
+
+                string ip = qs["ip"].ToString();
+                if (!IsIpVerificationSucceed(ip))
+                    return CommFunc.StandardFormat(MessageCode.IPVerifiFailed);
+
+                //查询设备是否存在
+                string sn = CommFunc.GetUniform12(qs["sn"].ToString());
+                string strSql = "SELECT uid FROM app_users WHERE glsn = '" + sn + "'";
+                object sqlResult = SqlHelper.ExecuteScalar(strSql);
+                if (sqlResult == null)
+                    return CommFunc.StandardFormat(MessageCode.DeviceNotExist);
+                int uid = (int)sqlResult;
+                
+                return HttpZGoloBusiness.CreateMyTalk(qs["verification"].ToString(), qs["talkname"].ToString(), qs["info"], qs["auth"], qs["talknotice"], qs["imageurl"], uid,qs["sn"]);
+            }
+            catch (Exception e)
+            {
+                MediaService.WriteLog("执行异常：" + e.ToString(), MediaService.wirtelog);
+                return CommFunc.StandardFormat(MessageCode.TalkCreateFaild, e.Message);
+            }
+        }
+        #endregion
+
+        #region 删除群组
+        /// <summary>
+        /// 删除群组
+        /// </summary>
+        /// <param name="qs"></param>
+        /// <returns></returns>
+        public static string DropGroup(NameValueCollection qs)
+        {
+            /* NameValueCollection 值列表
+            * sn,ip,tid
+            */
+
+            string recv = CommFunc.StandardFormat(MessageCode.MissKey);
+            if (qs == null || qs["ip"] == null || qs["sn"] == null || qs["tid"] == null)
+            {
+                MediaService.WriteLog("接收到删除群组 ：" + recv, MediaService.wirtelog);
+                return recv;
+            }
+            try
+            {
+                MediaService.WriteLog("接收到删除群组 ：ip =" + qs["ip"].ToString() + "&sn =" + qs["sn"].ToString() + "&tid =" + qs["tid"].ToString(), MediaService.wirtelog);
+
+                string ip = qs["ip"].ToString();
+                if (!IsIpVerificationSucceed(ip))
+                    return CommFunc.StandardFormat(MessageCode.IPVerifiFailed);
+
+                //查询设备是否存在
+                string sn = CommFunc.GetUniform12(qs["sn"].ToString());
+                string strSql = "SELECT uid FROM app_users WHERE glsn = '" + sn + "'";
+                object sqlResult = SqlHelper.ExecuteScalar(strSql);
+                if (sqlResult == null)
+                    return CommFunc.StandardFormat(MessageCode.DeviceNotExist);
+                int uid = (int)sqlResult;
+
+                int tid;
+                if (!Int32.TryParse(qs["tid"].ToString(), out tid))
+                    return CommFunc.StandardFormat(MessageCode.FormatError);
+
+
+                return HttpZGoloBusiness.UserQuitTalk(tid, uid);
+            }
+            catch (Exception e)
+            {
+                MediaService.WriteLog("执行异常：" + e.ToString(), MediaService.wirtelog);
+                return CommFunc.StandardFormat(MessageCode.DefaultError, e.Message);
+            }
+        }
+        #endregion
+
+        #region 删除群组组员
+        /// <summary>
+        /// 删除群组组员
+        /// </summary>
+        /// <param name="qs"></param>
+        /// <returns></returns>
+        public static string RemoveGroupMember(NameValueCollection qs)
+        {
+            /* NameValueCollection 值列表
+            * ip,tid,sn
+            */
+
+            string recv = CommFunc.StandardFormat(MessageCode.MissKey);
+            if (qs == null || qs["ip"] == null || qs["sn"] == null || qs["tid"] == null)
+            {
+                MediaService.WriteLog("接收到删除群组组员 ：" + recv, MediaService.wirtelog);
+                return recv;
+            }
+            try
+            {
+                MediaService.WriteLog("接收到删除群组组员 ：ip =" + qs["ip"].ToString() + "&sn =" + qs["sn"].ToString() + "&tid =" + qs["tid"].ToString(), MediaService.wirtelog);
+
+                string ip = qs["ip"].ToString();
+                if (!IsIpVerificationSucceed(ip))
+                    return CommFunc.StandardFormat(MessageCode.IPVerifiFailed);
+                //查询设备是否存在
+                string sn = CommFunc.GetUniform12(qs["sn"].ToString());
+                string strSql = "SELECT uid FROM app_users WHERE glsn = '" + sn + "'";
+                object sqlResult = SqlHelper.ExecuteScalar(strSql);
+                if (sqlResult == null)
+                    return CommFunc.StandardFormat(MessageCode.DeviceNotExist);
+                int uid = (int)sqlResult;
+
+                int tid;
+                if (!Int32.TryParse(qs["tid"].ToString(), out tid))
+                    return CommFunc.StandardFormat(MessageCode.FormatError);
+
+
+                return HttpZGoloBusiness.UserQuitTalk(tid, uid);
+            }
+            catch (Exception e)
+            {
+                MediaService.WriteLog("执行异常：" + e.ToString(), MediaService.wirtelog);
+                return CommFunc.StandardFormat(MessageCode.DefaultError, e.Message);
+            }
+        }
+        #endregion
+
+        #region 添加群组组员
+        /// <summary>
+        /// 添加群组组员
+        /// </summary>
+        /// <param name="qs"></param>
+        /// <returns></returns>
+        public static string AddGroupMember(NameValueCollection qs)
+        {
+            /* NameValueCollection 值列表
+            * ip,tid,sn
+            */
+
+            string recv = CommFunc.StandardFormat(MessageCode.MissKey);
+            if (qs == null || qs["ip"] == null || qs["sn"] == null || qs["tid"] == null)
+            {
+                MediaService.WriteLog("接收到添加群组组员 ：" + recv, MediaService.wirtelog);
+                return recv;
+            }
+            try
+            {
+                MediaService.WriteLog("接收到添加群组组员 ：ip =" + qs["ip"].ToString() + "&sn =" + qs["sn"].ToString() + "&tid =" + qs["tid"].ToString(), MediaService.wirtelog);
+
+                string ip = qs["ip"].ToString();
+                if (!IsIpVerificationSucceed(ip))
+                    return CommFunc.StandardFormat(MessageCode.IPVerifiFailed);
+                //查询设备是否存在
+                string sn = CommFunc.GetUniform12(qs["sn"].ToString());
+                string strSql = "SELECT uid FROM app_users WHERE glsn = '" + sn + "'";
+                object sqlResult = SqlHelper.ExecuteScalar(strSql);
+                if (sqlResult == null)
+                    return CommFunc.StandardFormat(MessageCode.DeviceNotExist);
+                int uid = (int)sqlResult;
+
+                int tid;
+                if (!Int32.TryParse(qs["tid"].ToString(), out tid))
+                    return CommFunc.StandardFormat(MessageCode.FormatError);
+
+
+                string sql = "select talkname,auth from wy_talk where tid=" + tid;
+                DataTable dt = SqlHelper.ExecuteTable(sql);
+                if (dt == null || dt.Rows.Count == 0)
+                    return CommFunc.StandardFormat(MessageCode.TalkNotExist);
+                string talkname = dt.Rows[0]["talkname"].ToString();
+                string auth = dt.Rows[0]["auth"].ToString();
+                return HttpZGoloBusiness.UserJoinTalk(talkname, auth, uid);
+            }
+            catch (Exception e)
+            {
+                MediaService.WriteLog("执行异常：" + e.ToString(), MediaService.wirtelog);
+                return CommFunc.StandardFormat(MessageCode.DefaultError, e.Message);
+            }
+        }
+        #endregion
+
+        #region 查询群组组员位置信息
+        /// <summary>
+        /// 查询群组组员位置信息
+        /// </summary>
+        /// <param name="qs"></param>
+        /// <returns></returns>
+        public static string QueryGroupMemberInfo(NameValueCollection qs)
+        {
+            /* NameValueCollection 值列表
+            * ip,tid
+            */
+
+            string recv = CommFunc.StandardFormat(MessageCode.MissKey);
+            if (qs == null || qs["ip"] == null || qs["tid"] == null)
+            {
+                MediaService.WriteLog("接收到查询群组组员位置信息 ：" + recv, MediaService.wirtelog);
+                return recv;
+            }
+            try
+            {
+                MediaService.WriteLog("接收到查询群组组员位置信息 ：ip =" + qs["ip"].ToString() + "&tid =" + qs["tid"].ToString(), MediaService.wirtelog);
+
+                string ip = qs["ip"].ToString();
+                if (!IsIpVerificationSucceed(ip))
+                    return CommFunc.StandardFormat(MessageCode.IPVerifiFailed);
+                int tid;
+                if (!Int32.TryParse(qs["tid"].ToString(), out tid))
+                    return CommFunc.StandardFormat(MessageCode.FormatError);
+
+
+                string sql = "SELECT glsn as sn ,uid  FROM app_users WHERE app_users.uid in (SELECT uid FROM wy_talkuser WHERE wy_talkuser.tid=" + tid + ")";
+                DataTable dt = SqlHelper.ExecuteTable(sql);
+                if (dt == null || dt.Rows.Count == 0)
+                    return CommFunc.StandardFormat(MessageCode.TalkInvalid);
+
+                Dictionary<int, string> uids = new Dictionary<int, string>();
+
+                for (int i = 0; i < dt.Rows.Count; i++)
+                    uids.Add(Convert.ToInt32(dt.Rows[i]["uid"]), dt.Rows[i]["sn"].ToString());
+                string subrecv = "";
+                foreach (KeyValuePair<int,string> uid in uids)
+                {
+                    if (MediaService.userDic.Keys.Contains(uid.Key))
+                    {
+                        UserObject user = MediaService.userDic[uid.Key];
+                        subrecv += (subrecv == "" ? "" : ",") + "{\"sn\":" + uid.Value + ",\"lo\": " + user.lo[CommFunc.APPID] + ",\"la\":" + user.la[CommFunc.APPID] + "}";
+                    }
+                }
+                return CommFunc.StandardListFormat(MessageCode.Success, subrecv);
+            }
+            catch (Exception e)
+            {
+                MediaService.WriteLog("执行异常：" + e.ToString(), MediaService.wirtelog);
+                return CommFunc.StandardFormat(MessageCode.DefaultError, e.Message);
+            }
+        }
+        #endregion
+
+        #endregion
+        
+    }
+}

@@ -1,0 +1,90 @@
+﻿using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Text;
+using System.Web;
+
+namespace MediaService
+{
+    /// <summary>
+    /// 请求车云网数据
+    /// </summary>
+    public static class MyCarAdapter
+    {
+        /// <summary>
+        /// 远端登陆验证
+        /// </summary>
+        /// <param name="login_key"></param>
+        /// <param name="password"></param>
+        /// <returns></returns>
+        public static dbscarreturnUser ServiceLogin(string login_key, string password)
+        {
+            string str = Utility.HttpRequestRoute("http://base.api.dbscar.com/?action=passport_service.login", "login_key=" + login_key + "&password=" + password + "&app_id=2014042900000006&time=" + Utility.GetTimeStamp(), "POST", Encoding.UTF8);
+            MediaService.WriteLog("登录提交至GOLO:" + str, MediaService.wirtelog);
+            dbscarreturnUser user = Utility.Deserialize<dbscarreturnUser>(str.Trim());
+            return user;
+        }
+
+        /// <summary>
+        /// 获取远端基础数据
+        /// </summary>
+        /// <param name="uid"></param>
+        /// <returns></returns>
+        public static dbscarBaseInfo GetBaseInfo(int uid)
+        {
+            string tokenlogin = Utility.StringToMD5Hash(DateTime.Now.Ticks.ToString());
+            string poststr = "action=userinfo.get_base_info_car_logo&app_id=2014042900000006&lan=zh&user_id=" + uid + "&ver=3.01";
+            string sign = Utility.StringToMD5Hash(poststr + tokenlogin).ToLower();
+            string str = Utility.HttpRequestRoute("http://base.api.dbscar.com/?action=userinfo.get_base_info_car_logo&app_id=2014042900000006&user_id=" + uid + "&ver=3.01&sign=" + sign, "lan=zh", "POST", Encoding.UTF8); ;
+            MediaService.WriteLog(" RecvThread接收： t=" + str, MediaService.wirtelog);
+            dbscarBaseInfo user = Utility.Deserialize<dbscarBaseInfo>(str.Trim());
+            return user;
+            //{"code":0,"msg":"","data":{"sex":"1","nick_name":"发布锋","signature":"","set_face_time":"0","mobile":"","email":"","user_name":"norhon007","is_bind_email":"0","is_bind_mobile":"0","roles":"0","identity_tag":"","reg_zone":"1","birthday":null,"age":0,"reg_time":"2015-10-29 10:51:10","login_time":"2015-12-28 18:06:05","url":null,"thumb":null,"face_ver":"0","company":"","contact":"","address":"","zipcode":"","qq":"","weixin":"","issue_date":"","expiry_date":"","profession":"","driving_age":"0","tag":"","hobby":"","country":"中国","province":"","city":"","tech":{"user_id":"1776790","tech_level":"0","non_brand":"","brand":[],"wunit":"","wtime":"","experience":"","roles":"0","is_expert":"0","permit":{"url":null,"thumb":"nullm"},"work_address":"","tage":"0","twork":"","country":"{\"s\":143}","repair":null,"repair_addr":null,"tname":null,"tcontact":null,"is_bind":"0","permit_new":[{"url":null,"thumb":"nullm","id":0}]},"review":null,"car_logo_url":[],"car_id":[],"car_series_name":[],"auto_code":[],"point":0,"point_level":0,"driving_tag":"","often_haunt":"","group_car":null,"group_act":[],"emergency":{"sum":0,"m_num":0},"photo":[{"url":null,"thumb":null}],"honor":"0","pub_account":{"pub_id":"","pub_name":""},"qrcode_content":"http:\/\/base.api.dbscar.com\/?action=qrcode_service.run&TVRjM05qYzVNQzh5TURFME1EUXlPVEF3TURBd01EQTJMM3Bv_TWc","company_name":"","company_logo":"","company_phone":"","company_fax":"","company_address":"","apply_status":"-1","public_id":null,"public_name":null,"public_face":null,"public_signature":null,"public_address":null}}
+        }
+
+        /// <summary>
+        /// 请求发送验证码(注册和找回密码用)
+        /// </summary>
+        /// <param name="req_info"></param>
+        /// <param name="is_check"></param>
+        /// <param name="isres"></param>
+        /// <param name="token"></param>
+        /// <returns></returns>
+        public static string VerifyCode_Req_Send_Code(string req_info, string is_check, string isres)
+        {
+            Dictionary<string, string> maps = new Dictionary<string, string>();
+            maps.Add("req_info", req_info);
+            maps.Add("is_check", is_check);
+            maps.Add("isres", isres);
+            string url = Utility.CreateLinkString(maps);
+            string str = Utility.HttpRequestRoute("http://base.api.dbscar.com/?action=verifycode.req_send_code", url, "POST", Encoding.UTF8); ;
+            MediaService.WriteLog(" RecvThread接收： t=" + str, MediaService.wirtelog);
+            return str;
+
+            //{"code":0,"msg":"","data":[]}
+        }
+
+        /// <summary>
+        /// 验证输入的验证码
+        /// </summary>
+        /// <param name="req_info"></param>
+        /// <param name="is_check"></param>
+        /// <param name="isres"></param>
+        /// <param name="token"></param>
+        /// <returns></returns>
+        public static bool Verifycode_Verify(string req_info, string verify_code)
+        {
+            Dictionary<string, string> maps = new Dictionary<string, string>();
+            maps.Add("req_info", req_info);
+            maps.Add("verify_code", verify_code);
+            string url = Utility.CreateLinkString(maps);
+            string str = Utility.HttpRequestRoute("http://base.api.dbscar.com/?action=verifycode.verify", url, "POST", Encoding.UTF8); ;
+            MediaService.WriteLog(" RecvThread接收： t=" + str, MediaService.wirtelog);
+            ResponseBaseInfo baseinfo = Utility.Deserialize<ResponseBaseInfo>(str);
+            return baseinfo.code == 0;
+
+            //{"code":0,"msg":"","data":[]}
+        }
+
+    }
+}

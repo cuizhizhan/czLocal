@@ -1,0 +1,4423 @@
+﻿using System;
+using System.Collections.Concurrent;
+using System.Collections.Generic;
+using System.Collections.Specialized;
+using System.Data;
+using System.IO;
+using System.Linq;
+using System.Net;
+using System.Runtime.Serialization.Json;
+using System.Security.Cryptography;
+using System.Text;
+using System.Threading.Tasks;
+using System.Web;
+using System.Net.Sockets;
+using MongoDB.Driver;
+using MongoDB.Driver.Builders;
+
+namespace MediaService
+{
+    public static class HttpZGoloBusiness
+    {
+        #region Token验证
+
+        private static ConcurrentDictionary<int, string> _TokenDic = new ConcurrentDictionary<int, string>();
+        private static ConcurrentDictionary<int, List<int>> _UidMapDic = new ConcurrentDictionary<int, List<int>>();
+
+        //统一Token验证
+        private static bool UniformVerification(string strouid, string struid, string strappid, string token, ref int ouid, ref int uid, ref string errMessage)
+        {
+            int appid;
+            if (!Int32.TryParse(strouid, out ouid) || !Int32.TryParse(struid, out uid) || !Int32.TryParse(strappid, out appid))
+            {
+                errMessage = StandardFormat(MessageCode.FormatError);
+                return false;
+            }
+            if (!VerificationToken(ouid, uid, appid, token.Replace("'", ""), ref errMessage))
+                return false;
+            return true;
+        }
+
+        //统一Token验证
+        private static bool UniformVerification(string strouid, string strappid, string token, ref int ouid, ref string errMessage)
+        {
+            int appid;
+            if (!Int32.TryParse(strouid, out ouid) || !Int32.TryParse(strappid, out appid))
+            {
+                errMessage = StandardFormat(MessageCode.FormatError);
+                return false;
+            }
+            if (!VerificationToken(ouid, appid, token.Replace("'", ""), ref errMessage))
+                return false;
+            return true;
+        }
+
+        /// <summary>
+        /// 验证Token是否有效
+        /// </summary>
+        /// <param name="ouid">南山服务器的用户UID</param>
+        /// <param name="uid">golo uid</param>
+        /// <param name="token">Token码</param>
+        /// <returns>验证是否成功：true：成功  false：失败</returns>
+        private static bool VerificationToken(int ouid, int uid, int appid, string token, ref string errMessage)
+        {
+            //Uid 是否存在
+            if (!IsContainsUid(ouid, uid))
+            {
+                errMessage = StandardFormat(MessageCode.DeviceNotBinding);
+                return false;
+            }
+            //Token 是否有效
+            if (IsContainToken(ouid, appid, token, ref errMessage))
+                return true;
+            return false;
+        }
+        /// <summary>
+        /// 验证Token是否有效
+        /// </summary>
+        /// <param name="ouid">南山服务器的用户UID</param>
+        /// <param name="token">Token码</param>
+        /// <returns>验证是否成功：true：成功  false：失败</returns>
+        private static bool VerificationToken(int ouid, int appid, string token, ref string errMessage)
+        {
+            //Token 是否有效
+            if (IsContainToken(ouid, appid, token, ref errMessage))
+                return true;
+            return false;
+        }
+
+        //验证是否存在合法的Token,内存-->数据库-->远端服务
+        public static bool IsContainToken(int ouid, int appid, string token, ref string errMessage)
+        {
+            //不存在本地
+            if (!_TokenDic.ContainsKey(ouid))
+            {
+                //不存在，找数据库是否存在
+                string strQueryToken = "SELECT token FROM wy_usertoken WHERE ouid = " + ouid;
+                object strToken = SqlHelper.ExecuteScalar(strQueryToken);
+
+                //数据库存在
+                if (strToken != null && !string.IsNullOrWhiteSpace((string)strToken))
+                {
+                    string localToken = strToken as string;
+                    //token 有效
+                    if (localToken.Equals(token))
+                    {
+                        _TokenDic.TryAdd(ouid, token);
+                        return true;
+                    }
+                    else //token 无效
+                    {
+                        //远端验证
+                        if (RemoteVerificationToken(ouid, appid, token, ref errMessage))
+                        {
+                            //远端验证通过
+                            _TokenDic.TryAdd(ouid, token);
+                            string strUpdateToken = "UPDATE wy_usertoken SET token = \'" + token + "\' WHERE ouid = " + ouid;
+                            SqlHelper.ExecuteNonQuery(strUpdateToken);
+                            return true;
+                        }
+                        else
+                            //验证不通过
+                            return false;
+                    }
+
+                }
+                else//数据库不存在
+                {
+                    //远端验证
+                    if (RemoteVerificationToken(ouid, appid, token, ref errMessage))
+                    {
+                        //远端验证通过
+                        _TokenDic.TryAdd(ouid, token);
+                        string strInsertToken = "insert into wy_usertoken(ouid,token) values (" + ouid + ",\'" + token + "\')";
+                        SqlHelper.ExecuteNonQuery(strInsertToken);
+                        return true;
+                    }
+                    else
+                        //验证不通过
+                        return false;
+                }
+            }
+            else //存在本地
+            {
+                string localToken = string.Empty;
+                _TokenDic.TryGetValue(ouid, out localToken);
+                //有效
+                if (localToken.Equals(token))
+                {
+                    return true;
+                }
+                else //无效
+                {
+                    //远端验证
+                    if (RemoteVerificationToken(ouid, appid, token, ref errMessage))
+                    {
+                        //远端验证通过
+                        _TokenDic.TryUpdate(ouid, token, token);
+                        string strUpdateToken = "UPDATE wy_usertoken SET token = \'" + token + "\' WHERE ouid = " + ouid;
+                        SqlHelper.ExecuteNonQuery(strUpdateToken);
+                        return true;
+                    }
+                    else
+                        //验证不通过
+                        return false;
+                }
+            }
+        }
+
+        //验证是否OUid下是否存在该Uid设备,内存-->数据库
+        public static bool IsContainsUid(int ouid, int uid)
+        {
+            List<int> uids = new List<int>();
+            if (_UidMapDic.ContainsKey(ouid))
+            {
+                _UidMapDic.TryGetValue(ouid, out uids);
+                if (uids.Contains(uid))
+                    return true;
+            }
+            string localToken = string.Empty;
+            string strSql = @"SELECT count(*) from wy_uidmap WHERE ouid = " + ouid + " and uid =" + uid;
+            //查询数据库是否存在匹配的设备
+            object count = SqlHelper.ExecuteScalar(strSql);
+            if (((int)count) != 0)
+            {
+                uids.Add(uid);
+                if (!_UidMapDic.ContainsKey(ouid))
+                    _UidMapDic.TryAdd(ouid, uids);
+                else
+                    _UidMapDic.TryUpdate(ouid, uids, uids);
+                return true;
+            }
+            return false;
+
+        }
+
+        //从南山服务器验证Token码
+        public static bool RemoteVerificationToken(int ouid, int appid, string token, ref string errMessage)
+        {
+            #region 深圳请求认证取消
+            string tokenmd5 = StringToMD5Hash(token).ToLower();
+            string poststr = "action=userinfo.check_token&app_id=" + appid + "&token=" + tokenmd5 + "&user_id=" + ouid + "&ver=1.0.0";
+            string sign = StringToMD5Hash(poststr + token).ToLower();
+            string result = HttpRequestRoute("http://base.api.dbscar.com/", "action=userinfo.check_token&token=" + tokenmd5 + "&app_id=" + appid + "&user_id=" + ouid + "&ver=1.0.0&sign=" + sign, "GET", Encoding.UTF8); ;
+
+            MessageFormat message = JsonHelper.JavaScriptSerialize<MessageFormat>(result);
+            if (message.code == 0)
+                return true;
+            else
+            {
+                if (message.msg == null)
+                    message.msg = "";
+                if (message.data == null || string.IsNullOrWhiteSpace(message.data.ToString()))
+                    message.data = new object();
+                errMessage = JsonHelper.JavaScriptSerialize<MessageFormat>(message);
+                return false;
+            }
+            #endregion
+        }
+
+        #region 执行http服务器请求
+        public static string HttpRequestRoute(string siteurl, string query, string requesttype, Encoding encoding)
+        {
+            try
+            {
+                HttpWebRequest request = null;
+                if (requesttype.ToString().ToUpper() == "GET")
+                {
+                    MediaService.WriteLog("http请求GET请求：" + siteurl + "?" + query, MediaService.wirtelog);
+                    request = (HttpWebRequest)WebRequest.Create(siteurl + "?" + query);
+                    request.Timeout = 1000 * MediaService.httptimeout;
+                    request.ReadWriteTimeout = 1000 * MediaService.httptimeout;
+                    request.Method = "GET";
+                }
+                else
+                {
+                    MediaService.WriteLog("http请求POST请求：" + siteurl + "POST:" + query, MediaService.wirtelog);
+                    request = (HttpWebRequest)WebRequest.Create(siteurl);
+                    request.Timeout = 1000 * MediaService.httptimeout;
+                    request.ReadWriteTimeout = 1000 * MediaService.httptimeout;
+                    request.Method = "POST";
+                    request.ContentType = "application/x-www-form-urlencoded";
+                    byte[] bs = encoding.GetBytes(query);
+                    request.ContentLength = bs.Length;
+                    using (Stream reqStream = request.GetRequestStream())
+                    {
+                        reqStream.Write(bs, 0, bs.Length);
+                        reqStream.Close();
+                    }
+                }
+                System.Net.WebResponse response = (HttpWebResponse)request.GetResponse();
+                StreamReader httpreader = new StreamReader(response.GetResponseStream(), encoding);
+                string json = httpreader.ReadToEnd();
+                httpreader.Close();
+                response.Close();
+                return json;
+            }
+            catch (Exception err)
+            {
+                MediaService.WriteLog("执行异常：" + err.ToString(), MediaService.wirtelog);
+                return "";
+            }
+        }
+        #endregion
+
+        #endregion
+
+        #region 通讯录
+
+        #region 获取用户通讯录
+        /// <summary>
+        /// 获取用户通讯录
+        /// </summary>
+        /// <param name="qs">键值对</param>
+        /// <returns></returns>
+        public static string GetUserContact(NameValueCollection qs)
+        {
+            #region uid
+            /* NameValueCollection 值列表
+             * ouid,token,uid,appid
+             */
+
+            string recv = StandardFormat(MessageCode.MissKey);
+            if (qs == null || qs["uid"] == null || qs["ouid"] == null || qs["token"] == null || qs["appid"] == null)
+            {
+                MediaService.WriteLog("接收到获取用户通讯录 ：" + recv, MediaService.wirtelog);
+                return recv;
+            }
+            try
+            {
+                MediaService.WriteLog("接收到获取用户通讯录 ：ouid =" + qs["ouid"].ToString() + " uid =" + qs["uid"].ToString() + " token=" + qs["token"].ToString() + "appid =" + qs["appid"].ToString(), MediaService.wirtelog);
+
+                int ouid = 0;
+                int uid = 0;
+                bool isVerToken = UniformVerification(qs["ouid"].ToString(), qs["uid"].ToString(), qs["appid"].ToString(), qs["token"].ToString(), ref ouid, ref uid, ref recv);
+                if (!isVerToken)
+                    return recv;
+
+                string strSql = @"SELECT users.uid as uid ,relation.fuid as fuid,users.glsn as sn ,relation.nickname as nickname,users.mobile as mobile,relation.state as state,users.updatetime as updatetime
+                                    from app_users as users, (SELECT wy_userrelation.fuid as fuid,wy_userrelation.nickname as nickname,wy_userrelation.state as state 
+                                    from wy_userrelation WHERE wy_userrelation.uid = '" + uid +
+                                        "' ) as relation WHERE users. uid = relation.fuid";
+                //根据用户 uid 查询跟该用户相关的通讯信息
+                DataTable dtContacts = SqlHelper.ExecuteTable(strSql);
+                string subrecv = "";
+                foreach (DataRow dr in dtContacts.Rows)
+                {
+                    string fuid = dr["fuid"].ToString();
+                    string sn = GetUniform8(dr["sn"].ToString());
+                    string nickname = dr["nickname"].ToString();
+                    string state = dr["state"].ToString();
+                    string mobile = dr["mobile"].ToString();
+                    string updatetime = ConvertDateTimeInt(dr["updatetime"].ToString()).ToString();
+                    subrecv += (subrecv == "" ? "" : ",") + "{\"fuid\":" + fuid + ",\"sn\": \"" + sn + "\",\"nickname\": \"" + nickname + "\",\"state\":" + state + ",\"updatetime\":\"" + updatetime + "\"}";
+                }
+
+                return StandardListFormat(MessageCode.Success, subrecv);
+            }
+            catch (Exception e)
+            {
+                return StandardFormat(MessageCode.DefaultError, e.Message);
+            }
+            #endregion
+        }
+
+        /// <summary>
+        /// 新-获取用户通讯录
+        /// </summary>
+        /// <param name="qs">键值对</param>
+        /// <returns></returns>
+        public static string NewGetUserContact(NameValueCollection qs)
+        {
+            #region qs
+            /* NameValueCollection 值列表
+             * ouid,token,appid,[updatetime]
+             */
+
+            string recv = StandardFormat(MessageCode.MissKey);
+            if (qs == null || qs["ouid"] == null || qs["token"] == null || qs["appid"] == null)
+            {
+                MediaService.WriteLog("接收到NewGetUserContact ：" + recv, MediaService.wirtelog);
+                return recv;
+            }
+            try
+            {
+                MediaService.WriteLog("接收到NewGetUserContact ：ouid =" + qs["ouid"] + " token=" + qs["token"] + "appid =" + qs["appid"], MediaService.wirtelog);
+
+                int ouid = 0;
+                bool isVerToken = UniformVerification(qs["ouid"], qs["appid"], qs["token"], ref ouid, ref recv);
+                if (!isVerToken)
+                    return recv;
+
+                //根据用户 ouid 查询跟该用户相关的通讯信息
+                string strSql =
+                    string.Format(@"SELECT F.fuid,A.glsn as sn,F.nickname,F.[state],F.updatetime,U.face_url
+                    FROM wy_userrelation F INNER JOIN app_users A ON F.ouid={0} AND F.[fuid]=A.[uid]
+					LEFT JOIN wy_user U ON U.[user_id]=F.ouid", ouid.ToString());
+                strSql += " ORDER BY updatetime DESC";
+                MediaService.WriteLog("查询sql ：" + strSql, MediaService.wirtelog);
+                DataTable dtContacts = SqlHelper.ExecuteTable(strSql);
+                string subrecv = "";
+                List<int> fuids = new List<int>();
+                foreach (DataRow dr in dtContacts.Rows)
+                {
+                    int fuid;
+                    int.TryParse(dr["fuid"].ToString(), out fuid);
+                    if (fuids.Contains(fuid) || fuid == 0)
+                    { continue; }   //去除重复的fuid
+                    else
+                    { fuids.Add(fuid); }
+
+                    string sn = GetUniform8(dr["sn"].ToString());
+                    string nickname = dr["nickname"].ToString();
+                    string state = dr["state"].ToString();
+                    string updatetime = ConvertDateTimeInt(dr["updatetime"].ToString()).ToString();
+                    string face_url = dr["face_url"] != null ? dr["face_url"].ToString() : "";
+                    subrecv += (subrecv == "" ? "" : ",") + "{\"fuid\":" + fuid + ",\"sn\": \"" + sn + "\",\"nickname\": \"" + nickname + "\",\"state\":" + state + ",\"updatetime\":\"" + updatetime + "\",\"face_url\":\"" + face_url + "\"}";
+                }
+
+                return StandardListFormat(MessageCode.Success, subrecv);
+            }
+            catch (Exception e)
+            {
+                return StandardFormat(MessageCode.DefaultError, e.Message);
+            }
+            #endregion
+        }
+        #endregion
+
+        #region 更新用户通讯录
+        /// <summary>
+        /// 更新用户通讯录
+        /// </summary>
+        /// <param name="qs">键值对</param>
+        /// <returns></returns>
+        public static string UpdateUserContact(NameValueCollection qs)
+        {
+            /* NameValueCollection 值列表
+             * ouid,token,uid,appid,fuid,[nickname],[state]?
+             */
+            string recv = StandardFormat(MessageCode.MissKey);
+            if (qs == null || qs["uid"] == null || qs["fuid"] == null || qs["ouid"] == null || qs["token"] == null || qs["appid"] == null)
+                return recv;
+            try
+            {
+                MediaService.WriteLog("接收到更新用户通讯录 ：ouid =" + qs["ouid"].ToString() + " uid =" + qs["uid"].ToString() + " token=" + qs["token"].ToString() + " fuid=" + qs["fuid"].ToString() + "appid =" + qs["appid"].ToString(), MediaService.wirtelog);
+
+                int ouid = 0;
+                int uid = 0;
+                bool isVerToken = UniformVerification(qs["ouid"].ToString(), qs["uid"].ToString(), qs["appid"].ToString(), qs["token"].ToString(), ref ouid, ref uid, ref recv);
+                if (!isVerToken)
+                    return recv;
+
+                int fuid = 0;
+                if (!Int32.TryParse(qs["fuid"].ToString(), out fuid))
+                    return StandardFormat(MessageCode.FormatError);
+
+                //构造Sql语句
+                StringBuilder sqlstr = new StringBuilder();
+                sqlstr.Append("update wy_userrelation set ");
+                List<string> conditions = new List<string>();
+                conditions.Add("updatetime = getdate() ");
+                if (qs.AllKeys.Contains("state"))
+                    conditions.Add("state =" + Int32.Parse(qs["state"].ToString()));
+                if (qs.AllKeys.Contains("nickname"))
+                    conditions.Add(" nickname = '" + qs["nickname"].ToString().Replace("'", "") + "' ");
+                for (int i = 0; i < conditions.Count; i++)
+                {
+                    sqlstr.Append(conditions[i]);
+                    if (i != conditions.Count - 1)
+                        sqlstr.Append(" , ");
+                }
+                sqlstr.Append(" where uid =" + uid + " and fuid =" + fuid);
+
+                sqlstr.Append(";UPDATE app_users SET  updatetime = GETDATE() WHERE uid = " + uid);
+                //加上当前用户更新时间
+
+                int count = SqlHelper.ExecuteNonQuery(sqlstr.ToString());
+                if (count > 0)
+                {
+                    string subrecv = GetUserRelation(uid, fuid);
+                    if (string.IsNullOrWhiteSpace(subrecv))
+                        return StandardFormat(MessageCode.UpdateFaild);
+
+                    recv = "{\"status\":true,\"list\":[" + subrecv + "]}";
+                    PublicClass.SendToOnlineUserList(null, recv, "", new List<int>() { uid }, 99, 0, CommType.updateUserContact, APPID);
+
+                    return StandardFormat(MessageCode.Success);
+                }
+                else
+                    return StandardFormat(MessageCode.UpdateFaild);
+            }
+            catch (Exception e)
+            {
+                return StandardFormat(MessageCode.DefaultError, e.Message);
+            }
+        }
+
+        private static string GetUserRelation(int uid, int fuid)
+        {
+            string strSql = @"SELECT relation.fuid as fuid,users.glsn as sn ,relation.nickname as nickname,users.mobile as mobile,relation.state as state,users.updatetime as updatetime
+                                    from app_users as users, (SELECT wy_userrelation.fuid as fuid,wy_userrelation.nickname as nickname,wy_userrelation.state as state 
+                                    from wy_userrelation WHERE wy_userrelation.uid = '" + uid +
+                                    "' and wy_userrelation.fuid ='" + fuid + "' ) as relation WHERE users. uid = relation.fuid";
+            //根据用户 uid 查询跟该用户相关的通讯信息
+            DataTable dtContacts = SqlHelper.ExecuteTable(strSql);
+            string subrecv = "";
+            foreach (DataRow dr in dtContacts.Rows)
+            {
+                string sn = dr["sn"].ToString();
+                string nickname = dr["nickname"].ToString();
+                string state = dr["state"].ToString();
+                string mobile = dr["mobile"].ToString();
+                string updatetime = ConvertDateTimeInt(dr["updatetime"].ToString()).ToString();
+                subrecv += (subrecv == "" ? "" : ",") + "{\"fuid\":" + fuid + ",\"sn\": \"" + sn + "\",\"nickname\": \"" + nickname + "\",\"state\":" + state + ",\"updatetime\":\"" + updatetime + "\"}";
+            }
+            return subrecv;
+        }
+
+        /// <summary>
+        /// 新-更新用户通讯录
+        /// </summary>
+        /// <param name="qs">键值对</param>
+        /// <returns></returns>
+        public static string NewUpdateUserContact(NameValueCollection qs)
+        {
+            /* NameValueCollection 值列表
+             * ouid,token,appid,fuid,[nickname],[state]
+             */
+            string recv = StandardFormat(MessageCode.MissKey);
+            if (qs == null || qs["fuid"] == null || qs["ouid"] == null || qs["token"] == null || qs["appid"] == null)
+                return recv;
+            try
+            {
+                MediaService.WriteLog("NewUpdateUserContact ：ouid =" + qs["ouid"] + " token=" + qs["token"] + " fuid=" + qs["fuid"] + "appid =" + qs["appid"], MediaService.wirtelog);
+
+                int ouid = 0;
+                bool isVerToken = UniformVerification(qs["ouid"], qs["appid"], qs["token"], ref ouid, ref recv);
+                if (!isVerToken)
+                    return recv;
+
+                int fuid;
+                if (!Int32.TryParse(qs["fuid"], out fuid))
+                    return StandardFormat(MessageCode.FormatError);
+
+                //构造Sql语句
+                StringBuilder sqlstr = new StringBuilder();
+                sqlstr.Append("update wy_userrelation set ");
+                List<string> conditions = new List<string>();
+                conditions.Add("updatetime = getdate() ");
+                if (qs.AllKeys.Contains("state"))
+                    conditions.Add("state =" + Int32.Parse(qs["state"]));
+                if (qs.AllKeys.Contains("nickname"))
+                    conditions.Add(" nickname = '" + qs["nickname"].Replace("'", "") + "' ");
+                for (int i = 0; i < conditions.Count; i++)
+                {
+                    sqlstr.Append(conditions[i]);
+                    if (i != conditions.Count - 1)
+                        sqlstr.Append(" , ");
+                }
+                sqlstr.Append(" where ouid =" + ouid + " and fuid =" + fuid);
+
+                sqlstr.Append(";UPDATE wy_user SET relationtime=" + Utility.GetTimeStamp() + " WHERE [user_id]=" + ouid);
+                //加上当前用户更新时间
+
+                int count = SqlHelper.ExecuteNonQuery(sqlstr.ToString());
+                if (count > 0)
+                {
+                    List<int> uidlist = new List<int>();
+                    string sql = string.Format("SELECT [uid] FROM wy_userrelation WHERE ouid={0} AND fuid={1}",
+                        ouid.ToString(), fuid.ToString());
+                    foreach (DataRow row in SqlHelper.ExecuteTable(sql).Rows)
+                    {
+                        int uid;
+                        int.TryParse(row["uid"].ToString(), out uid);
+                        if (uid > 0)
+                        {
+                            uidlist.Add(uid);
+                        }
+                    }
+                    if (uidlist.Count > 0)
+                    {
+                        string subrecv = NewGetUserRelation(ouid, fuid);
+                        if (subrecv.Length > 0)
+                        {
+                            recv = "{\"status\":true,\"list\":[" + subrecv + "]}";
+                            PublicClass.SendToOnlineUserList(null, recv, "", uidlist, 99, 0, CommType.updateUserContact, APPID);
+                        }
+                    }
+                    return StandardFormat(MessageCode.Success);
+                }
+                else
+                {
+                    return StandardFormat(MessageCode.UpdateFaild);
+                }
+            }
+            catch (Exception e)
+            {
+                return StandardFormat(MessageCode.DefaultError, e.Message);
+            }
+        }
+
+        /// <summary>
+        /// 新-获取用户关系信息
+        /// </summary>
+        /// <param name="ouid"></param>
+        /// <param name="fuid"></param>
+        /// <returns></returns>
+        private static string NewGetUserRelation(int ouid, int fuid)
+        {
+            string strSql = "SELECT A.glsn AS sn,R.nickname,[state],R.updatetime FROM wy_userrelation R INNER JOIN app_users A ON R.ouid=" + ouid + " AND R.fuid=" + fuid + " AND R.fuid=A.[uid]";
+            //根据用户 ouid 查询跟该用户相关的通讯信息
+            DataTable dtContacts = SqlHelper.ExecuteTable(strSql);
+            string subrecv = "";
+            foreach (DataRow dr in dtContacts.Rows)
+            {
+                string sn = dr["sn"].ToString();
+                string nickname = dr["nickname"].ToString();
+                string state = dr["state"].ToString();
+                string updatetime = ConvertDateTimeInt(dr["updatetime"].ToString()).ToString();
+                subrecv += (subrecv == "" ? "" : ",") + "{\"fuid\":" + fuid + ",\"sn\": \"" + sn + "\",\"nickname\": \"" + nickname + "\",\"state\":" + state + ",\"updatetime\":\"" + updatetime + "\"}";
+            }
+            return subrecv;
+        }
+        #endregion
+
+        #region 删除用户通讯录
+        /// <summary>
+        /// 删除用户通讯录
+        /// </summary>
+        /// <param name="qs">键值对</param>
+        /// <returns></returns>
+        public static string DeleteUserContact(NameValueCollection qs)
+        {
+            /* NameValueCollection 值列表
+             * ouid,token,uid,fuid,appid
+             */
+            string recv = StandardFormat(MessageCode.MissKey);
+            if (qs == null || qs["uid"] == null || qs["fuid"] == null || qs["ouid"] == null || qs["token"] == null || qs["appid"] == null)
+                return recv;
+            try
+            {
+                MediaService.WriteLog("接收到删除用户通讯录 ：ouid =" + qs["ouid"].ToString() + " uid =" + qs["uid"].ToString() + " token=" + qs["token"].ToString() + " fuid=" + qs["fuid"].ToString() + "appid =" + qs["appid"].ToString(), MediaService.wirtelog);
+
+                int ouid = 0;
+                int uid = 0;
+                bool isVerToken = UniformVerification(qs["ouid"].ToString(), qs["uid"].ToString(), qs["appid"].ToString(), qs["token"].ToString(), ref ouid, ref uid, ref recv);
+                if (!isVerToken)
+                    return recv;
+
+                int fuid = 0;
+                if (!Int32.TryParse(qs["fuid"].ToString(), out fuid))
+                    return StandardFormat(MessageCode.FormatError);
+
+                MediaService.WriteLog("接收到删除用户通讯录 ：uid=" + uid + ",fuid =" + fuid, MediaService.wirtelog);
+                StringBuilder strSql = new StringBuilder();
+                strSql.Append("delete from [wy_userrelation] where uid =" + uid + " and fuid =" + fuid);
+                strSql.Append(";UPDATE app_users SET  updatetime = GETDATE() WHERE uid = " + uid);
+                int count = SqlHelper.ExecuteNonQuery(strSql.ToString());
+                if (count > 0)
+                {
+                    recv = "{\"status\":true,\"fuid\":\"" + fuid + "\"}";
+                    PublicClass.SendToOnlineUserList(null, recv, "", new List<int>() { uid }, 99, 0, CommType.deleteUserContact, APPID);
+                    return StandardFormat(MessageCode.Success);
+                }
+                else
+                    return StandardFormat(MessageCode.DeleteFaild);
+            }
+            catch (Exception e)
+            {
+                return StandardFormat(MessageCode.DefaultError, e.Message);
+            }
+        }
+
+        /// <summary>
+        /// 新-删除用户通讯录
+        /// </summary>
+        /// <param name="qs">键值对</param>
+        /// <returns></returns>
+        public static string NewDeleteUserContact(NameValueCollection qs)
+        {
+            /* NameValueCollection 值列表
+             * ouid,token,fuid,appid
+             */
+            string recv = StandardFormat(MessageCode.MissKey);
+            if (qs == null || qs["fuid"] == null || qs["ouid"] == null || qs["token"] == null || qs["appid"] == null)
+                return recv;
+            try
+            {
+                MediaService.WriteLog("NewDeleteUserContact ：ouid =" + qs["ouid"] + " token=" + qs["token"] + " fuid=" + qs["fuid"] + "appid =" + qs["appid"], MediaService.wirtelog);
+
+                int ouid = 0;
+                bool isVerToken = UniformVerification(qs["ouid"], qs["appid"], qs["token"], ref ouid, ref recv);
+                if (!isVerToken)
+                    return recv;
+
+                int fuid;
+                if (!Int32.TryParse(qs["fuid"], out fuid))
+                    return StandardFormat(MessageCode.FormatError);
+
+                MediaService.WriteLog("fuid =" + fuid, MediaService.wirtelog);
+                string sql = string.Format("SELECT [uid] FROM wy_userrelation WHERE ouid={0} AND fuid={1}",
+                        ouid.ToString(), fuid.ToString());
+                List<int> uidlist = new List<int>();
+                foreach (DataRow row in SqlHelper.ExecuteTable(sql).Rows)
+                {
+                    int uid;
+                    int.TryParse(row["uid"].ToString(), out uid);
+                    if (uid > 0)
+                    {
+                        uidlist.Add(uid);
+                    }
+                }
+                StringBuilder strSql = new StringBuilder();
+                strSql.Append("delete from [wy_userrelation] where ouid =" + ouid + " and fuid =" + fuid);
+                strSql.Append(";UPDATE wy_user SET relationtime=" + Utility.GetTimeStamp() + " WHERE [user_id]=" + ouid);
+                int count = SqlHelper.ExecuteNonQuery(strSql.ToString());
+                if (count > 0)
+                {
+                    recv = "{\"status\":true,\"fuid\":\"" + fuid + "\"}";
+                    PublicClass.SendToOnlineUserList(null, recv, "", uidlist, 99, 0, CommType.deleteUserContact, APPID);
+                    return StandardFormat(MessageCode.Success);
+                }
+                return StandardFormat(MessageCode.DeleteFaild);
+            }
+            catch (Exception e)
+            {
+                return StandardFormat(MessageCode.DefaultError, e.Message);
+            }
+        }
+        #endregion
+
+        #region 新增用户通讯录
+        /// <summary>
+        /// 新增用户通讯录
+        /// </summary>
+        /// <param name="qs">键值对</param>
+        /// <returns></returns>
+        public static string AddUserContact(NameValueCollection qs)
+        {
+            /* NameValueCollection 值列表
+             * ouid,token,uid,appid,sn,nickname
+             */
+
+            string recv = StandardFormat(MessageCode.MissKey);
+            if (qs == null || qs["ouid"] == null || qs["token"] == null || qs["appid"] == null || qs["uid"] == null || qs["sn"] == null)
+            {
+                MediaService.WriteLog("接收到新增用户通讯录 ：" + recv, MediaService.wirtelog);
+                return recv;
+            }
+            try
+            {
+                MediaService.WriteLog("接收到新增用户通讯录 ：ouid =" + qs["ouid"].ToString() + "token =" + qs["token"].ToString() + "appid =" + qs["appid"].ToString() + "uid =" + qs["uid"].ToString() + "sn =" + qs["sn"].ToString(), MediaService.wirtelog);
+
+                int ouid = 0;
+                int uid = 0;
+                bool isVerToken = UniformVerification(qs["ouid"].ToString(), qs["uid"].ToString(), qs["appid"].ToString(), qs["token"].ToString(), ref ouid, ref uid, ref recv);
+                if (!isVerToken)
+                    return recv;
+
+                string sn = GetUniform12(qs["sn"].ToString());
+
+                //查询设备是否存在
+                string strSql = "SELECT uid FROM app_users WHERE glsn = '" + sn + "'";
+                object sqlResult = SqlHelper.ExecuteScalar(strSql);
+                if (sqlResult == null)
+                    return StandardFormat(MessageCode.DeviceNotExist);
+                int fuid = (int)sqlResult;
+
+                strSql = "select count(*) from wy_userrelation where uid =" + uid + " and fuid =" + fuid;
+                object result = SqlHelper.ExecuteScalar(strSql);
+                if (result != null && ((int)result > 0))
+                    return StandardFormat(MessageCode.ContactExist);
+                string nickname = qs["nickname"] == null ? "" : qs["nickname"].ToString().Replace("'", "");
+                //构造Sql语句
+                strSql = @"INSERT into wy_userrelation(uid,fuid,nickname,state) VALUES(" + uid + "," + fuid + ",'" + nickname + "'," + 0 + ")";
+                strSql += ";UPDATE app_users SET  updatetime = GETDATE() WHERE uid = " + uid;
+                int count = SqlHelper.ExecuteNonQuery(strSql);
+                if (count > 0)
+                {
+                    string subrecv = GetUserRelation(uid, fuid);
+                    if (string.IsNullOrWhiteSpace(subrecv))
+                        return StandardFormat(MessageCode.InsertFaild);
+
+                    recv = "{\"status\":true,\"list\":[" + subrecv + "]}";
+                    PublicClass.SendToOnlineUserList(null, recv, "", new List<int>() { uid }, 99, 0, CommType.addUserContact, APPID);
+
+                    string data = "{\"fuid\":" + fuid + "}";
+                    return StandardObjectFormat(MessageCode.Success, data);
+                }
+                else
+                    return StandardFormat(MessageCode.InsertFaild);
+
+            }
+            catch (Exception e)
+            {
+                return StandardFormat(MessageCode.DefaultError, e.Message);
+            }
+        }
+
+        /// <summary>
+        /// 新-新增用户通讯录
+        /// </summary>
+        /// <param name="qs">键值对</param>
+        /// <returns></returns>
+        public static string NewAddUserContact(NameValueCollection qs)
+        {
+            /* NameValueCollection 值列表
+             * ouid,token,appid,sn,nickname
+             */
+
+            string recv = StandardFormat(MessageCode.MissKey);
+            if (qs == null || qs["ouid"] == null || qs["token"] == null || qs["appid"] == null || qs["sn"] == null)
+            {
+                MediaService.WriteLog("接收到新增用户通讯录 ：" + recv, MediaService.wirtelog);
+                return recv;
+            }
+            try
+            {
+                MediaService.WriteLog("接收到新增用户通讯录 ：ouid =" + qs["ouid"] + "token =" + qs["token"] + "appid =" + qs["appid"] + "sn =" + qs["sn"], MediaService.wirtelog);
+
+                int ouid = 0;
+                bool isVerToken = UniformVerification(qs["ouid"], qs["appid"], qs["token"], ref ouid, ref recv);
+                if (!isVerToken)
+                    return recv;
+
+                string sn = GetUniform12(qs["sn"]);
+
+                //查询设备是否存在
+                string strSql = "SELECT uid FROM app_users WHERE glsn = '" + sn + "'";
+                object sqlResult = SqlHelper.ExecuteScalar(strSql);
+                if (sqlResult == null)
+                    return StandardFormat(MessageCode.DeviceNotExist);
+                int fuid = (int)sqlResult;
+
+                string nickname = qs["nickname"] == null ? "" : qs["nickname"].Replace("'", "");
+                strSql = string.Format(@"SELECT COUNT(1) FROM wy_userrelation WHERE ouid={0} AND (fuid={1} OR nickname='{2}')"
+                                    , ouid.ToString(), fuid.ToString(), nickname);
+                object result = SqlHelper.ExecuteScalar(strSql);
+                if (result != null && int.Parse(result.ToString()) > 0)
+                    return StandardFormat(MessageCode.ContactExist);
+
+                strSql = "SELECT [uid] FROM wy_uidmap WHERE ouid=" + ouid;
+                List<int> uidlist = new List<int>();
+                foreach (DataRow row in SqlHelper.ExecuteTable(strSql).Rows)
+                {
+                    int uid;
+                    int.TryParse(row["uid"].ToString(), out uid);
+                    if (uid > 0)
+                    {
+                        uidlist.Add(uid);
+                    }
+                }
+                //构造Sql语句
+                strSql = string.Format("INSERT into wy_userrelation(uid,fuid,nickname,ouid) VALUES(0,{0},'{1}',{2})", fuid.ToString(), nickname, ouid.ToString());
+                strSql += ";UPDATE wy_user SET relationtime=" + Utility.GetTimeStamp() + " WHERE [user_id]=" + ouid;
+                int count = SqlHelper.ExecuteNonQuery(strSql);
+                if (count > 0)
+                {
+                    string subrecv = NewGetUserRelation(ouid, fuid);
+                    if (string.IsNullOrWhiteSpace(subrecv))
+                        return StandardFormat(MessageCode.InsertFaild);
+
+                    recv = "{\"status\":true,\"list\":[" + subrecv + "]}";
+                    PublicClass.SendToOnlineUserList(null, recv, "", uidlist, 99, 0, CommType.addUserContact, APPID);
+
+                    string data = "{\"fuid\":" + fuid + "}";
+                    return StandardObjectFormat(MessageCode.Success, data);
+                }
+                return StandardFormat(MessageCode.InsertFaild);
+            }
+            catch (Exception e)
+            {
+                return StandardFormat(MessageCode.DefaultError, e.Message);
+            }
+        }
+        #endregion
+        #endregion
+
+        #region wifi管理
+
+        #region 获取用户下面的uid
+        private static List<int> GetUserUid(int ouid)
+        {
+            string strSql = "SELECT uid FROM wy_uidmap WHERE ouid=" + ouid;
+            DataTable dtContacts = SqlHelper.ExecuteTable(strSql);
+            List<int> uids = new List<int>();
+            foreach (DataRow dr in dtContacts.Rows)
+            {
+                string id = dr["uid"].ToString();
+                int uid;
+                if (Int32.TryParse(id, out uid))
+                    uids.Add(uid);
+            }
+            return uids;
+        }
+        #endregion
+
+        #region 获取用户wifi列表
+        /// <summary>
+        /// 获取用户wifi列表
+        /// </summary>
+        /// <param name="qs">键值对</param>
+        /// <returns></returns>
+        public static string GetUserWifis(NameValueCollection qs)
+        {
+            /* NameValueCollection 值列表
+             * uid,appid,ouid,token
+             */
+
+            #region uid
+            string recv = StandardFormat(MessageCode.MissKey);
+            if (qs == null || qs["token"] == null || qs["ouid"] == null || qs["appid"] == null)
+            {
+                MediaService.WriteLog("接收到获取用户wifi列表 ：" + recv, MediaService.wirtelog);
+                return recv;
+            }
+            try
+            {
+                MediaService.WriteLog("接收到获取用户wifi列表 ：ouid =" + qs["ouid"].ToString() + " token=" + qs["token"].ToString() + "appid =" + qs["appid"].ToString(), MediaService.wirtelog);
+
+                int ouid = 0;
+                bool isVerToken = UniformVerification(qs["ouid"].ToString(), qs["appid"].ToString(), qs["token"].ToString(), ref ouid, ref recv);
+                if (!isVerToken)
+                    return recv;
+
+                MediaService.WriteLog("接收到获取用户wifi列表 ：ouid=" + ouid, MediaService.wirtelog);
+                string strSql = @"SELECT id,name,password,updatetime from wy_userwifi WHERE ouid = " + ouid;
+                //根据用户 uid 查询跟该用户相关的wifi列表
+                DataTable dtContacts = SqlHelper.ExecuteTable(strSql);
+                string subrecv = "";
+                foreach (DataRow dr in dtContacts.Rows)
+                {
+                    string id = dr["id"].ToString();
+                    string name = dr["name"].ToString();
+                    string password = dr["password"].ToString();
+                    string updatetime = ConvertDateTimeInt(dr["updatetime"].ToString()).ToString();
+                    subrecv += (subrecv == "" ? "" : ",") + "{\"id\":" + id + ",\"name\": \"" + name + "\",\"password\":\"" + password + "\",\"updatetime\":\"" + updatetime + "\"}";
+                }
+                return StandardListFormat(MessageCode.Success, subrecv);
+            }
+            catch (Exception e)
+            {
+                return StandardFormat(MessageCode.MissKey, e.Message);
+            }
+            #endregion
+        }
+        #endregion
+
+        #region 更新用户wifi信息
+        /// <summary>
+        /// 更新用户wifi信息
+        /// </summary>
+        /// <param name="qs">键值对</param>
+        /// <returns></returns>
+        public static string UpdateUserWifi(NameValueCollection qs)
+        {
+            /* NameValueCollection 值列表
+             * ouid,uid,token,id,name,password
+             */
+            string recv = StandardFormat(MessageCode.MissKey);
+            if (qs == null || qs["ouid"] == null || qs["id"] == null || qs["token"] == null || qs["appid"] == null)
+            {
+                MediaService.WriteLog("接收到更新用户wifi信息 ：" + recv, MediaService.wirtelog);
+                return recv;
+            }
+            try
+            {
+                MediaService.WriteLog("接收到更新用户wSuccessifi信息 ：ouid =" + qs["ouid"].ToString() + "&id =" + qs["id"].ToString() + "&token=" + qs["token"].ToString() + "&appid =" + qs["appid"].ToString(), MediaService.wirtelog);
+
+                int ouid = 0;
+                bool isVerToken = UniformVerification(qs["ouid"].ToString(), qs["appid"].ToString(), qs["token"].ToString(), ref ouid, ref recv);
+                if (!isVerToken)
+                    return recv;
+
+                int id;
+                if (!Int32.TryParse(qs["id"].ToString(), out id))
+                    return StandardFormat(MessageCode.FormatError);
+                string name = qs["name"] == null ? "" : qs["name"].ToString().Replace("'", "");
+                string password = qs["password"] == null ? "" : qs["password"].ToString().Replace("'", "");
+                StringBuilder strSql = new StringBuilder();
+                //构造Sql语句
+                List<int> uids = GetUserUid(ouid);
+                strSql.Append(@"update wy_userwifi set name = '" + name + "', password ='" + password + "', updatetime = getdate()  where id =  " + id);
+                if (uids.Count > 0)
+                {
+                    strSql.Append(UpdateUserWifiUpdatetime(uids));
+                }
+                int count = SqlHelper.ExecuteNonQuery(strSql.ToString());
+                if (count > 0)
+                {
+                    recv = "{\"status\":true,\"id\":" + id + ",\"name\":\"" + name + "\",\"password\":\"" + password + "\"}";
+                    uids.ForEach(uid => PublicClass.SendToOnlineUserList(null, recv, "", new List<int>() { uid }, 99, 0, CommType.updateUserWifi, APPID));
+                    return StandardFormat(MessageCode.Success);
+                }
+                else
+                    return StandardFormat(MessageCode.UpdateFaild);
+
+
+            }
+            catch (Exception e)
+            {
+                return StandardFormat(MessageCode.DefaultError, e.Message);
+            }
+        }
+
+        private static string UpdateUserWifiUpdatetime(List<int> uids)
+        {
+            StringBuilder sb = new StringBuilder();
+            sb.Append(";UPDATE app_users SET wifitime=" + ConvertToLongTime() + " WHERE ");
+            uids.ForEach(uid =>
+            {
+                if (uid == uids.First())
+                    sb.Append(" uid =" + uid);
+                else
+                    sb.Append(" or uid =" + uid);
+            });
+            sb.Append(";");
+            return sb.ToString();
+        }
+
+        private static long ConvertToLongTime()
+        {
+            return DateTime.UtcNow.Ticks / 10000000 - 62135596800;
+        }
+        #endregion
+
+        #region 删除用户wifi信息
+        /// <summary>
+        /// 删除用户wifi信息
+        /// </summary>
+        /// <param name="qs">键值对</param>
+        /// <returns></returns>
+        public static string DeleteUserWifi(NameValueCollection qs)
+        {
+            /* NameValueCollection 值列表
+             * ouid,uid,token,id,appid
+             */
+            string recv = StandardFormat(MessageCode.MissKey);
+            if (qs == null || qs["token"] == null || qs["id"] == null || qs["ouid"] == null || qs["appid"] == null)
+            {
+                MediaService.WriteLog("接收到删除用户wifi信息 ：" + recv, MediaService.wirtelog);
+                return recv;
+            }
+            try
+            {
+                MediaService.WriteLog("接收到删除用户wifi信息 ：ouid =" + qs["ouid"].ToString() + " id =" + qs["id"].ToString() + " token=" + qs["token"].ToString() + "appid =" + qs["appid"].ToString(), MediaService.wirtelog);
+
+                int ouid = 0;
+                bool isVerToken = UniformVerification(qs["ouid"].ToString(), qs["appid"].ToString(), qs["token"].ToString(), ref ouid, ref recv);
+                if (!isVerToken)
+                    return recv;
+
+                int id;
+                if (!Int32.TryParse(qs["id"].ToString(), out id))
+                    return StandardFormat(MessageCode.FormatError);
+
+                List<int> uids = GetUserUid(ouid);
+                StringBuilder strSql = new StringBuilder();
+                strSql.Append("delete from [wy_userwifi] where id =" + id);
+                if (uids.Count > 0)
+                {
+                    strSql.Append(UpdateUserWifiUpdatetime(uids));
+                }
+                int count = SqlHelper.ExecuteNonQuery(strSql.ToString());
+                if (count > 0)
+                {
+                    recv = "{\"status\":true,\"id\":" + id + "}";
+                    uids.ForEach(uid => PublicClass.SendToOnlineUserList(null, recv, "", new List<int>() { uid }, 99, 0, CommType.deleteUserWifi, APPID));
+                    return StandardFormat(MessageCode.Success);
+                }
+                else
+                    return StandardFormat(MessageCode.DeleteFaild);
+            }
+            catch (Exception e)
+            {
+                return StandardFormat(MessageCode.DefaultError, e.Message);
+            }
+        }
+        #endregion
+
+        #region 添加用户wifi信息
+        /// <summary>
+        /// 添加用户wifi信息
+        /// </summary>
+        /// <param name="qs">键值对</param>
+        /// <returns></returns>
+        public static string AddUserWifi(NameValueCollection qs)
+        {
+            /* NameValueCollection 值列表
+             * ouid,token,name,password,appid
+             */
+            string recv = StandardFormat(MessageCode.MissKey);
+            if (qs == null || qs["token"] == null || qs["ouid"] == null || qs["name"] == null || qs["password"] == null || qs["appid"] == null)
+            {
+                MediaService.WriteLog("接收到添加用户wifi信息 ：" + recv, MediaService.wirtelog);
+                return recv;
+            }
+            try
+            {
+                MediaService.WriteLog("接收到添加用户wifi信息 ：ouid =" + qs["ouid"].ToString() + " token=" + qs["token"].ToString() + " name =" + qs["name"].ToString() + " password =" + qs["password"].ToString() + "appid =" + qs["appid"].ToString(), MediaService.wirtelog);
+
+                int ouid = 0;
+                bool isVerToken = UniformVerification(qs["ouid"].ToString(), qs["appid"].ToString(), qs["token"].ToString(), ref ouid, ref recv);
+                if (!isVerToken)
+                    return recv;
+
+                string name = qs["name"] == null ? "" : qs["name"].ToString().Replace("'", "");
+                string password = qs["password"] == null ? "" : qs["password"].ToString().Replace("'", "");
+
+                //构造Sql语句
+                string strSql = @"insert into wy_userwifi(ouid,name,password) values(" + ouid + ",'" + name + "','" + password + "')";
+                int count1 = SqlHelper.ExecuteNonQuery(strSql);
+                if (count1 > 0)
+                {
+                    strSql = "SELECT id FROM wy_userwifi,(select max(updatetime) as  updatetime,ouid from wy_userwifi  WHERE ouid = " + ouid + " group by ouid) as newdate WHERE wy_userwifi.ouid=newdate.ouid AND wy_userwifi.updatetime=newdate.updatetime and wy_userwifi.name='" + name + "'";
+                    int wid = (int)SqlHelper.ExecuteScalar(strSql);
+
+                    recv = "{\"status\":true,\"id\":" + wid + ",\"name\":\"" + name + "\",\"password\":\"" + password + "\"}";
+                    List<int> uids = GetUserUid(ouid);
+                    if (uids.Count > 0)
+                    {
+                        strSql = UpdateUserWifiUpdatetime(uids);
+                        SqlHelper.ExecuteNonQuery(strSql);
+                    }
+                    uids.ForEach(uid => PublicClass.SendToOnlineUserList(null, recv, "", new List<int>() { uid }, 99, 0, CommType.addUserWifi, APPID));
+                    string data = "{\"id\":" + wid + "}";
+                    return StandardObjectFormat(MessageCode.Success, data);
+                }
+                else
+                    return StandardFormat(MessageCode.InsertFaild);
+            }
+            catch (Exception e)
+            {
+                return StandardFormat(MessageCode.DefaultError, e.Message);
+            }
+        }
+        #endregion
+
+        #region 切换用户wifi信息
+        /// <summary>
+        /// 切换用户wifi信息
+        /// </summary>
+        /// <param name="qs">键值对</param>
+        /// <returns></returns>
+        public static string SwitchUserWifi(NameValueCollection qs)
+        {
+            /* NameValueCollection 值列表
+             * ouid,token,appid,id
+             */
+            string recv = StandardFormat(MessageCode.MissKey);
+            if (qs == null || qs["token"] == null || qs["ouid"] == null || qs["id"] == null || qs["appid"] == null)
+            {
+                MediaService.WriteLog("接收到切换用户wifi信息 ：" + recv, MediaService.wirtelog);
+                return recv;
+            }
+            try
+            {
+                MediaService.WriteLog("接收到切换用户wifi信息 ：ouid =" + qs["ouid"].ToString() + "&token=" + qs["token"].ToString() + "&id =" + qs["id"].ToString() + "&appid =" + qs["appid"].ToString(), MediaService.wirtelog);
+
+                int ouid = 0;
+                bool isVerToken = UniformVerification(qs["ouid"].ToString(), qs["appid"].ToString(), qs["token"].ToString(), ref ouid, ref recv);
+                if (!isVerToken)
+                    return recv;
+
+                int id;
+                if (!Int32.TryParse(qs["id"].ToString(), out id))
+                    return StandardFormat(MessageCode.FormatError);
+
+                string strSql = @"SELECT name,password,updatetime from wy_userwifi WHERE id = " + id;
+                //根据用户 uid 查询跟该用户相关的wifi列表
+                DataTable dtWifi = SqlHelper.ExecuteTable(strSql);
+                if (dtWifi == null || dtWifi.Rows.Count == 0)
+                    return StandardFormat(MessageCode.WifiNotExist);
+                string subrecv = "";
+                recv = "";
+                string name = dtWifi.Rows[0]["name"].ToString();
+                string password = dtWifi.Rows[0]["password"].ToString();
+                string updatetime = ConvertDateTimeInt(dtWifi.Rows[0]["updatetime"].ToString()).ToString();
+                subrecv = "{\"id\":" + id + ",\"name\": \"" + name + "\",\"password\":\"" + password + "\",\"updatetime\":\"" + updatetime + "\"}";
+                recv = "{\"status\":true,\"id\":" + id + ",\"name\": \"" + name + "\",\"password\":\"" + password + "\",\"updatetime\":\"" + updatetime + "\"}";
+
+                List<int> uids = GetUserUid(ouid);
+                uids.ForEach(uid => PublicClass.SendToOnlineUserList(null, recv, "", new List<int>() { uid }, 99, 0, CommType.switchUserWifi, APPID));
+
+                return StandardObjectFormat(MessageCode.Success, subrecv);
+            }
+            catch (Exception e)
+            {
+                return StandardFormat(MessageCode.DefaultError, e.Message);
+            }
+        }
+        #endregion
+
+        #endregion
+
+        #region 绑定
+
+        #region 获取用户绑定设备信息
+        /// <summary>
+        /// 获取用户绑定设备信息
+        /// </summary>
+        /// <param name="qs">键值对</param>
+        /// <returns></returns>
+        public static string UserBinding(NameValueCollection qs)
+        {
+            /* NameValueCollection 值列表
+             * ouid,sn,token,vcode,appid,gender
+             */
+
+            #region uid
+            string recv = StandardFormat(MessageCode.MissKey);
+            if (qs == null || qs["ouid"] == null || qs["token"] == null || qs["sn"] == null || qs["vcode"] == null || qs["appid"] == null)
+            {
+                MediaService.WriteLog("接收到用户绑定设备信息 ：" + recv, MediaService.wirtelog);
+                return recv;
+            }
+            try
+            {
+                MediaService.WriteLog("接收到用户绑定设备信息 ：ouid =" + qs["ouid"].ToString() + " token =" + qs["token"].ToString() + " sn =" + qs["sn"].ToString() + " vcode =" + qs["vcode"].ToString() + "appid =" + qs["appid"].ToString(), MediaService.wirtelog);
+
+                int ouid = 0;
+                bool isVerToken = UniformVerification(qs["ouid"].ToString(), qs["appid"].ToString(), qs["token"].ToString(), ref ouid, ref recv);
+                if (!isVerToken)
+                    return recv;
+
+                //查询设备是否存在
+                string sn = GetUniform12(qs["sn"].ToString());
+
+                string strSql = "SELECT uid FROM app_users WHERE glsn = '" + sn + "'";
+                object sqlResult = SqlHelper.ExecuteScalar(strSql);
+                if (sqlResult == null)
+                    return StandardFormat(MessageCode.DeviceNotExist);
+                int uid = (int)sqlResult;
+
+                //查询设备是否在线
+                UserObject uo = null;
+                recv = StandardFormat(MessageCode.DeviceOutLine);
+                if (!MediaService.userDic.TryGetValue(uid, out uo))
+                    return recv;
+                if (uo == null || uo.socket[APPID] == null)
+                    return recv;
+
+                //查询是否注册SN
+                string strUidMap = "SELECT count(*) FROM wy_uidmap  where uid = " + uid;//"SELECT count(*) FROM wy_uidmap  where ouid =" + ouid + " and uid = " + uid;
+                object sqlUidMapResult = SqlHelper.ExecuteScalar(strUidMap);
+                if (sqlUidMapResult != null)
+                {
+                    int count = (int)sqlUidMapResult;
+                    if (count > 0)
+                        return StandardFormat(MessageCode.SNExist);
+                }
+                string vcode = qs["vcode"].Replace("'", "");
+                string gender = qs["gender"] == null ? "" : qs["gender"].Replace("'", "");
+
+                recv = "{\"status\":true,\"uid\":\"" + ouid + "\",\"vcode\":\"" + vcode + "\",\"gender\":\"" + gender + "\"}";
+                PublicClass.SendToOnlineUserList(null, recv, "", new List<int>() { uid }, 99, 0, CommType.userBinding, APPID);
+
+                return StandardFormat(MessageCode.Success);
+            }
+            catch (Exception e)
+            {
+                return StandardFormat(MessageCode.DefaultError, e.Message);
+            }
+            #endregion
+        }
+
+        /// <summary>
+        /// 获取用户绑定设备信息
+        /// </summary>
+        /// <param name="qs">键值对</param>
+        /// <returns></returns>
+        public static string UserUnBinding(NameValueCollection qs)
+        {
+            /* NameValueCollection 值列表
+             * ouid,sn,token,appid
+             */
+
+            #region uid
+            string recv = StandardFormat(MessageCode.MissKey);
+            if (qs == null || qs["ouid"] == null || qs["token"] == null || qs["sn"] == null || qs["appid"] == null)
+            {
+                MediaService.WriteLog("接收到用户绑定设备信息 ：" + recv, MediaService.wirtelog);
+                return recv;
+            }
+            try
+            {
+                MediaService.WriteLog("接收到用户绑定设备信息 ：ouid =" + qs["ouid"].ToString() + "&token =" + qs["token"].ToString() + "&sn =" + qs["sn"].ToString() + "&appid =" + qs["appid"].ToString(), MediaService.wirtelog);
+
+                int ouid = 0;
+                bool isVerToken = UniformVerification(qs["ouid"].ToString(), qs["appid"].ToString(), qs["token"].ToString(), ref ouid, ref recv);
+                if (!isVerToken)
+                    return recv;
+
+                //查询设备是否存在
+                string sn = GetUniform12(qs["sn"].ToString());
+                string strSql = "SELECT uid FROM app_users WHERE glsn = '" + sn + "'";
+                object sqlResult = SqlHelper.ExecuteScalar(strSql);
+                if (sqlResult == null)
+                    return StandardFormat(MessageCode.DeviceNotExist);
+                int uid = (int)sqlResult;
+                //查询是否注册SN
+                string strUidMap = "SELECT count(*) FROM wy_uidmap  where ouid =" + ouid + " and uid = " + uid;
+                object sqlUidMapResult = SqlHelper.ExecuteScalar(strUidMap);
+                if (sqlUidMapResult != null)
+                {
+                    int count = (int)sqlUidMapResult;
+                    if (count > 0)
+                    {
+                        string strdelete = "delete from wy_uidmap  where ouid=" + ouid + " and uid=" + uid;
+                        int deleteresult = SqlHelper.ExecuteNonQuery(strdelete);
+                        if (deleteresult > 0)
+                        {
+                            return StandardFormat(MessageCode.Success);
+                        }
+                        else
+                            return StandardFormat(MessageCode.DeleteFaild);
+                    }
+                }
+                return StandardFormat(MessageCode.DefaultError, "设备未绑定");
+
+            }
+            catch (Exception e)
+            {
+                MediaService.WriteLog("接收到用户绑定设备信息异常：" + e.Message, MediaService.wirtelog);
+                return StandardFormat(MessageCode.DefaultError, e.Message);
+            }
+            #endregion
+        }
+
+        /// <summary>
+        /// 获取用户绑定设备信息
+        /// </summary>
+        /// <param name="qs">键值对</param>
+        /// <returns></returns>
+        public static string UserBindingTest(NameValueCollection qs)
+        {
+            /* NameValueCollection 值列表
+             * ouid,sn,token,vcode
+             */
+
+            #region uid
+            string recv = StandardFormat(MessageCode.MissKey);
+            if (qs == null || qs["ouid"] == null || qs["sn"] == null)
+            {
+                MediaService.WriteLog("接收到获取用户绑定设备信息 ：" + recv, MediaService.wirtelog);
+                return recv;
+            }
+            try
+            {
+                MediaService.WriteLog("接收到用户绑定设备信息 ：ouid =" + qs["ouid"].ToString() + " sn =" + qs["sn"].ToString(), MediaService.wirtelog);
+
+                int ouid;
+                if (!Int32.TryParse(qs["ouid"].ToString(), out ouid))
+                    return StandardFormat(MessageCode.FormatError);
+
+                //查询设备是否存在
+                string sn = GetUniform12(qs["sn"].ToString());
+                string strSql = "SELECT uid FROM app_users WHERE glsn = '" + sn + "'";
+                object sqlResult = SqlHelper.ExecuteScalar(strSql);
+                if (sqlResult == null)
+                    return StandardFormat(MessageCode.DeviceNotExist);
+                int uid = (int)sqlResult;
+                //查询是否注册SN
+                string strUidMap = "SELECT count(*) FROM wy_uidmap  where ouid =" + ouid + " and uid = " + uid;
+                object sqlUidMapResult = SqlHelper.ExecuteScalar(strUidMap);
+                if (sqlUidMapResult != null)
+                {
+                    int count = (int)sqlUidMapResult;
+                    if (count > 0)
+                        return StandardFormat(MessageCode.SNExist);
+                }
+                //不存在插入设备
+                string strInsert = "INSERT INTO wy_uidmap(ouid,uid) VALUES(" + ouid + "," + uid + ")";
+                int countInsert = SqlHelper.ExecuteNonQuery(strInsert);
+                if (countInsert < 1)
+                    return StandardFormat(MessageCode.InsertFaild);
+
+                return StandardFormat(MessageCode.Success);
+            }
+            catch (Exception e)
+            {
+                return StandardFormat(MessageCode.DefaultError, e.Message);
+            }
+            #endregion
+        }
+
+        /// <summary>
+        /// 解除用户绑定设备信息
+        /// </summary>
+        /// <param name="qs">键值对</param>
+        /// <returns></returns>
+        public static string DeleteUserBindingTest(NameValueCollection qs)
+        {
+            /* NameValueCollection 值列表
+             * ouid,sn
+             */
+
+            #region uid
+            string recv = StandardFormat(MessageCode.MissKey);
+            if (qs == null || qs["ouid"] == null || qs["sn"] == null)
+            {
+                MediaService.WriteLog("接收到获取用户绑定设备信息 ：" + recv, MediaService.wirtelog);
+                return recv;
+            }
+            try
+            {
+                MediaService.WriteLog("接收到用户绑定设备信息 ：ouid =" + qs["ouid"].ToString() + " sn =" + qs["sn"].ToString(), MediaService.wirtelog);
+
+                int ouid;
+                if (!Int32.TryParse(qs["ouid"].ToString(), out ouid))
+                    return StandardFormat(MessageCode.FormatError);
+
+                //查询设备是否存在
+                string sn = GetUniform12(qs["sn"].ToString());
+                string strSql = "SELECT uid FROM app_users WHERE glsn = '" + sn + "'";
+                object sqlResult = SqlHelper.ExecuteScalar(strSql);
+                if (sqlResult == null)
+                    return StandardFormat(MessageCode.DeviceNotExist);
+                int uid = (int)sqlResult;
+                //查询是否注册SN
+                string strUidMap = "SELECT count(*) FROM wy_uidmap  where ouid =" + ouid + " and uid = " + uid;
+                object sqlUidMapResult = SqlHelper.ExecuteScalar(strUidMap);
+                if (sqlUidMapResult != null)
+                {
+                    int count = (int)sqlUidMapResult;
+                    if (count > 0)
+                    {
+                        string strdelete = "delete from wy_uidmap  where ouid=" + ouid + " and uid=" + uid;
+                        int deleteresult = SqlHelper.ExecuteNonQuery(strdelete);
+                        if (deleteresult > 0)
+                        {
+                            return StandardFormat(MessageCode.Success);
+                        }
+                        else
+                            return StandardFormat(MessageCode.DeleteFaild);
+                    }
+                }
+                return StandardFormat(MessageCode.DefaultError, "设备未绑定");
+
+            }
+            catch (Exception e)
+            {
+                return StandardFormat(MessageCode.DefaultError, e.Message);
+            }
+            #endregion
+        }
+        #endregion
+
+        #region 查询用户设备绑定信息
+        /// <summary>
+        /// 查询用户设备绑定信息
+        /// </summary>
+        /// <param name="qs"></param>
+        /// <returns></returns>
+        public static string GetUserBindingInfo(NameValueCollection qs)
+        {
+            /* NameValueCollection 值列表
+            * ouid,token,appid
+            */
+
+            #region uid
+            string recv = StandardFormat(MessageCode.MissKey);
+            if (qs == null || qs["ouid"] == null || qs["token"] == null || qs["appid"] == null)
+            {
+                MediaService.WriteLog("接收到查询用户设备绑定信息 ：" + recv, MediaService.wirtelog);
+                return recv;
+            }
+            try
+            {
+                MediaService.WriteLog("接收到查询用户设备绑定信息 ：ouid =" + qs["ouid"].ToString() + "token =" + qs["token"].ToString() + "appid =" + qs["appid"].ToString(), MediaService.wirtelog);
+
+                int ouid = 0;
+                bool isVerToken = UniformVerification(qs["ouid"].ToString(), qs["appid"].ToString(), qs["token"].ToString(), ref ouid, ref recv);
+                if (!isVerToken)
+                    return recv;
+
+                //查询是否注册SN
+                string strSql = "SELECT wy_uidmap.ouid as ouid,wy_uidmap.uid as uid ,app_users.glsn as sn,wy_uidmap.sim as sim,app_users.gender as gender from wy_uidmap,app_users WHERE wy_uidmap.uid = app_users.uid and wy_uidmap.ouid =" + ouid;
+                DataTable dtContacts = SqlHelper.ExecuteTable(strSql);
+                string subrecv = "";
+                foreach (DataRow dr in dtContacts.Rows)
+                {
+                    string uid = dr["uid"].ToString();
+                    string sn = GetUniform8(dr["sn"].ToString());
+                    string sim = dr["sim"] == null ? "" : dr["sim"].ToString();
+                    string gender = dr["gender"].ToString();
+                    subrecv += (subrecv == "" ? "" : ",") + "{\"uid\":" + uid + ",\"sn\":\"" + sn + "\",\"sim\":\"" + sim + "\",\"gender\":\"" + gender + "\"}";
+                }
+                return StandardListFormat(MessageCode.Success, subrecv);
+            }
+            catch (Exception e)
+            {
+                return StandardFormat(MessageCode.DefaultError, e.Message);
+            }
+            #endregion
+        }
+        #endregion
+
+        #region 数据库接口
+        /// <summary>
+        /// 修改数据库
+        /// </summary>
+        /// <param name="qs"></param>
+        /// <returns></returns>
+        public static string QueryDatabase(NameValueCollection qs)
+        {
+            /* NameValueCollection 值列表
+            * query
+            */
+
+            #region uid
+            string recv = StandardFormat(MessageCode.MissKey);
+            if (qs == null || qs["query"] == null)
+            {
+                MediaService.WriteLog("接收到查询数据库 ：" + recv, MediaService.wirtelog);
+                return recv;
+            }
+            try
+            {
+                //MediaService.WriteLog("接收到查询数据库 ：query =" + qs["query"].ToString(), MediaService.wirtelog);
+
+                //查询是否注册SN
+                string strSql = qs["query"].ToString().Replace("?", "%");
+                DataTable dtTable = SqlHelper.ExecuteTable(strSql);
+
+                List<string> columnNames = new List<string>();
+                foreach (DataColumn dc in dtTable.Columns)
+                {
+                    columnNames.Add(dc.ColumnName);
+                }
+
+                string subrecv = "";
+                string subcolumn = "";
+                foreach (DataRow dr in dtTable.Rows)
+                {
+                    subcolumn = "";
+                    foreach (var name in columnNames)
+                    {
+                        string value = dr[name] == null ? "" : dr[name].ToString();
+                        subcolumn += (subcolumn == "" ? "" : ",") + "\"" + name + "\":\"" + value + "\"";
+                    }
+                    subrecv += (subrecv == "" ? "" : ",") + "{" + subcolumn + "}";
+                }
+                return StandardListFormat(MessageCode.Success, subrecv);
+            }
+            catch (Exception e)
+            {
+                return StandardFormat(MessageCode.DefaultError, e.Message);
+            }
+            #endregion
+        }
+
+        /// <summary>
+        /// 修改数据库
+        /// </summary>
+        /// <param name="qs"></param>
+        /// <returns></returns>
+        public static string ModifyDatabase(NameValueCollection qs)
+        {
+            /* NameValueCollection 值列表
+            * modify
+            */
+
+            #region uid
+            string recv = StandardFormat(MessageCode.MissKey);
+            if (qs == null || qs["modify"] == null)
+            {
+                MediaService.WriteLog("接收到修改数据库 ：" + recv, MediaService.wirtelog);
+                return recv;
+            }
+            try
+            {
+                //MediaService.WriteLog("接收到修改数据库 ：modify =" + qs["modify"].ToString(), MediaService.wirtelog);
+
+                //查询是否注册SN
+                string strSql = qs["modify"].ToString();
+                if (strSql.Trim().StartsWith("(") && strSql.Trim().EndsWith(")"))
+                {
+                    strSql = strSql.Substring(1, strSql.Length - 2);
+                }
+                int count = SqlHelper.ExecuteNonQuery(strSql);
+                string subrecv = "{\"count\":" + count + "}";
+                return StandardObjectFormat(MessageCode.Success, subrecv);
+            }
+            catch (Exception e)
+            {
+                return StandardFormat(MessageCode.DefaultError, e.Message);
+            }
+            #endregion
+        }
+        #endregion
+
+        #region 查询约聊
+        /// <summary>
+        /// 查询约聊
+        /// </summary>
+        /// <param name="qs"></param>
+        /// <returns></returns>
+        public static string QueryState(NameValueCollection qs)
+        {
+            /* NameValueCollection 值列表
+            * 
+            */
+
+            #region uid
+            string recv = StandardFormat(MessageCode.MissKey);
+            if (qs == null)
+            {
+                MediaService.WriteLog("接收到查询约聊实时数据 ：" + recv, MediaService.wirtelog);
+                return recv;
+            }
+            try
+            {
+                MediaService.WriteLog("接收到查询约聊实时数据 ", MediaService.wirtelog);
+
+                string subrecv = "";
+                foreach (KeyValuePair<int, TalkState> ts in MediaService.stateDic)
+                {
+                    string key = ts.Key.ToString();
+                    subrecv += (subrecv == "" ? "" : ",") + "{\"key\":" + key + ",\"talkstate\":" + ts.Value.ToString() + "}";
+                }
+                return StandardListFormat(MessageCode.Success, subrecv);
+            }
+            catch (Exception e)
+            {
+                return StandardFormat(MessageCode.DefaultError, e.Message);
+            }
+            #endregion
+        }
+        #endregion
+
+        #region 查询约聊记录
+        /// <summary>
+        /// 查询约聊记录
+        /// </summary>
+        /// <param name="qs"></param>
+        /// <returns></returns>
+        public static string QueryRecord(NameValueCollection qs)
+        {
+            /* NameValueCollection 值列表
+            * 
+            */
+
+            #region uid
+            string recv = StandardFormat(MessageCode.MissKey);
+            if (qs == null)
+            {
+                MediaService.WriteLog("接收到查询约聊记录 ：" + recv, MediaService.wirtelog);
+                return recv;
+            }
+            try
+            {
+                MediaService.WriteLog("接收到查询约聊实时记录 ", MediaService.wirtelog);
+                return StandardListFormat(MessageCode.Success, TalkRecordManager.Instance.GetRecord());
+            }
+            catch (Exception e)
+            {
+                return StandardFormat(MessageCode.DefaultError, e.Message);
+            }
+            #endregion
+        }
+        #endregion
+
+        #region 查询绑定GoloZ的数量
+        /// <summary>
+        /// 查询绑定GoloZ的数量
+        /// </summary>
+        /// <param name="qs"></param>
+        /// <returns></returns>
+        public static string GetBindCount(NameValueCollection qs)
+        {
+            /* NameValueCollection 值列表
+             * starttime,endtime
+             */
+            string recv = StandardFormat(MessageCode.MissKey);
+            if (qs == null || qs["starttime"] == null || qs["endtime"] == null)
+            {
+                MediaService.WriteLog("接收到查询绑定GoloZ的数量:" + recv, MediaService.wirtelog);
+                return recv;
+            }
+            try
+            {
+                MediaService.WriteLog("接收到查询绑定GoloZ的数量 starttime:" + qs["starttime"].ToString() + "endtime:" + qs["endtime"].ToString(), MediaService.wirtelog);
+                string starttime = qs["starttime"] == null ? "" : qs["starttime"].ToString();
+                string endtime = qs["endtime"] == null ? "" : qs["endtime"].ToString();
+                string sql = "";
+                int time_count = 0;
+                int total_count = 0;
+                if (!string.IsNullOrWhiteSpace(starttime) && !string.IsNullOrWhiteSpace(endtime))
+                {
+                    DateTime stime = StampToDateTime(starttime);
+                    DateTime etime = StampToDateTime(endtime);
+                    DateTime temp = DateTime.Now;
+                    if (stime > etime)
+                    {
+                        temp = etime;
+                        etime = stime;
+                        stime = temp;
+                    }
+                    sql = "SELECT t1.time_count,t2.total_count FROM (select count(uid) as time_count from wy_uidmap where bindtime between '" + stime.ToString() + "' and '" + etime.ToString() + "' ) as t1, (select count(uid) AS total_count from wy_uidmap where bindtime is null or bindtime < '" + etime.ToString() + "') as t2";
+                    DataTable dt = SqlHelper.ExecuteTable(sql);
+                    if (dt.Rows.Count > 0)
+                    {
+                        time_count = Convert.ToInt32(dt.Rows[0]["time_count"].ToString());
+                        total_count = Convert.ToInt32(dt.Rows[0]["total_count"].ToString());
+                    }
+                }
+                string subrecv = "{\"total_count\":" + total_count + ",\"time_count\":" + time_count + "}";
+                return StandardObjectFormat(MessageCode.Success, subrecv);
+            }
+            catch (Exception e)
+            {
+                MediaService.WriteLog("执行异常：" + e.ToString(), MediaService.wirtelog);
+                return HttpZGoloBusiness.StandardFormat(MessageCode.DefaultError, e.Message);
+            }
+        }
+        #endregion
+
+        #region 修改性别信息
+        /// <summary>
+        /// 修改性别信息
+        /// </summary>
+        /// <param name="qs">键值对</param>
+        /// <returns></returns>
+        public static string ModifyGender(NameValueCollection qs)
+        {
+            /* NameValueCollection 值列表
+             * ouid,token,appid,gender,uid
+             */
+
+            #region uid
+            string recv = StandardFormat(MessageCode.MissKey);
+            if (qs == null || qs["ouid"] == null || qs["token"] == null || qs["appid"] == null || qs["uid"] == null || qs["gender"] == null)
+            {
+                MediaService.WriteLog("接收到修改性别信息 ：" + recv, MediaService.wirtelog);
+                return recv;
+            }
+            try
+            {
+                MediaService.WriteLog("接收到修改性别信息 ：ouid=" + qs["ouid"].ToString() + "&token=" + qs["token"].ToString() + "&appid=" + qs["appid"].ToString() + "&gender=" + qs["gender"].ToString() + "&uid=" + qs["uid"].ToString(), MediaService.wirtelog);
+
+                int ouid = 0;
+                int uid = 0;
+                bool isVerToken = UniformVerification(qs["ouid"].ToString(), qs["uid"].ToString(), qs["appid"].ToString(), qs["token"].ToString(), ref ouid, ref uid, ref recv);
+                if (!isVerToken)
+                    return recv;
+
+                int gender = 0;
+                string sex = qs["gender"].ToString();
+                if (!int.TryParse(sex, out gender))
+                {
+                    return StandardFormat(MessageCode.FormatError);
+                }
+                string sql = string.Format("UPDATE app_users  SET gender ='{0}' WHERE uid ={1}", gender, uid);
+                int count = SqlHelper.ExecuteNonQuery(sql);
+                return StandardFormat(MessageCode.Success);
+            }
+            catch (Exception e)
+            {
+                return StandardFormat(MessageCode.DefaultError, e.Message);
+            }
+            #endregion
+        }
+        #endregion
+
+        #endregion
+
+        #region 频道管理
+
+        #region 获取频道数
+        public static void GetTalkNum(int tid, ref int totalnum, ref int usernum)
+        {
+            totalnum = 0;
+            usernum = 0;
+            TalkMessage tm;
+            object obj = SqlHelper.ExecuteScalar("SELECT count(*) FROM wy_talkuser WHERE tid=" + tid);
+            if (obj != null)
+            {
+                totalnum = Int32.Parse(obj.ToString());
+                if (MediaService.talkDic.TryGetValue(tid, out tm))
+                {
+                    UserObject uo = null;
+                    foreach (int uid in tm.uidlist)
+                    {
+                        if (MediaService.userDic.TryGetValue(uid, out uo))
+                        {
+                            if (uo.socket != null && uo.socket[APPID] != null)
+                            {
+                                if (uo.socket[APPID].Connected)
+                                {
+                                    usernum++;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        #endregion
+
+        #region 获取频道号码
+        /// <summary>
+        /// 获取频道号码
+        /// </summary>
+        /// <param name="qs"></param>
+        /// <returns></returns>
+        public static string GetTalkName(NameValueCollection qs)
+        {
+            /* NameValueCollection 值列表
+             * [uid],appid,ouid,token
+             */
+
+            string recv = StandardFormat(MessageCode.MissKey);
+            if (qs == null || qs["ouid"] == null || qs["token"] == null || qs["appid"] == null)
+            {
+                MediaService.WriteLog("接收到获取频道号码：" + recv, MediaService.wirtelog);
+                return recv;
+            }
+            try
+            {
+                MediaService.WriteLog("接收到获取频道号码 ：ouid =" + qs["ouid"].ToString() + "token =" + qs["token"].ToString() + "appid =" + qs["appid"].ToString() + "uid =" + qs["uid"], MediaService.wirtelog);
+
+                int ouid = 0;
+                bool isVerToken = UniformVerification(qs["ouid"].ToString(), qs["appid"].ToString(), qs["token"].ToString(), ref ouid, ref recv);
+                if (!isVerToken)
+                    return recv;
+
+                string talkname = null;
+                string verifi = null;
+                if (GetTalkName(ref talkname, ref verifi))
+                {
+                    string data = "{\"talkname\":\"" + talkname + "\",\"verification\":\"" + verifi + "\"}";
+                    recv = StandardObjectFormat(MessageCode.Success, data);
+                }
+                else
+                {
+                    recv = StandardFormat(MessageCode.TalkAllocationFaild);
+                }
+                return recv;
+            }
+            catch (Exception e)
+            {
+                return StandardFormat(MessageCode.DefaultError, e.Message);
+            }
+        }
+
+        internal static bool GetTalkName(ref string talkname, ref string verifi)
+        {
+            Random ran = new Random((int)DateTime.Now.Ticks);
+            for (int k = 0; k < 10; k++)
+            {
+                string qhao = ran.Next(100, 100000).ToString();
+                if (CommBusiness.IsTalkNameOK(qhao) == true)
+                {
+                    talkname = qhao.PadLeft(5, '0');
+                    break;
+                }
+            }
+            if (talkname != null)
+            {
+                verifi = StringToMD5Hash(talkname + MediaService.Verification);
+                return true;
+            }
+            return false;
+        }
+        #endregion
+
+        #region 创建我的频道
+        /// <summary>
+        /// 创建我的频道
+        /// </summary>
+        /// <param name="qs"></param>
+        /// <returns></returns>
+        public static string CreateMyTalk(NameValueCollection qs)
+        {
+            /* NameValueCollection 值列表
+             * uid,appid,ouid,token,talkname,verification,[info],[auth],[imageurl]
+             */
+
+            string recv = StandardFormat(MessageCode.MissKey);
+            if (qs == null || qs["ouid"] == null || qs["token"] == null || qs["appid"] == null || qs["uid"] == null || qs["talkname"] == null && qs["verification"] == null)
+            {
+                MediaService.WriteLog("接收到创建我的频道 ：" + recv, MediaService.wirtelog);
+                return recv;
+            }
+            try
+            {
+                MediaService.WriteLog("接收到创建我的频道 ：ouid =" + qs["ouid"].ToString() + "&token =" + qs["token"].ToString() + "&appid =" + qs["appid"].ToString() + "&uid =" + qs["uid"].ToString() + "&talkname =" + qs["talkname"].ToString() + "&verification =" + qs["verification"].ToString(), MediaService.wirtelog);
+
+                int ouid = 0;
+                int uid = 0;
+                bool isVerToken = UniformVerification(qs["ouid"].ToString(), qs["uid"].ToString(), qs["appid"].ToString(), qs["token"].ToString(), ref ouid, ref uid, ref recv);
+                if (!isVerToken)
+                    return recv;
+
+                recv = CreateMyTalk(qs["verification"].ToString().Replace("'", ""), qs["talkname"].ToString().Replace("'", ""), qs["info"], qs["auth"], qs["talknotice"], qs["imageurl"], uid);
+                return recv;
+            }
+            catch (Exception e)
+            {
+                MediaService.WriteLog("执行异常：" + e.ToString(), MediaService.wirtelog);
+                return StandardFormat(MessageCode.TalkCreateFaild, e.Message);
+            }
+        }
+
+        internal static string CreateMyTalk(string verification, string talkname, object info, object auth, object talknotice, object imageurl, int uid)
+        {
+            string recv = "";
+            if (verification == StringToMD5Hash(talkname + MediaService.Verification))
+            {
+                object obj = SqlHelper.ExecuteScalar("select count(tid) from [wy_talk] where createuid=" + uid + " and type=0");
+                if (obj != null && (obj.ToString() == "0" || obj.ToString() == "1"))
+                {
+                    if (talkname.Length == 5 && CommBusiness.IsValiNum(talkname) && CommBusiness.IsTalkNameOK(talkname) == true)
+                    {
+                        info = info == null ? "" : info.ToString().Replace("'", "");
+                        auth = auth == null ? "" : auth.ToString().Replace("'", "");//ran.Next(100, 1000).ToString() : qs["auth"].Replace("'", "");
+                        talknotice = talknotice == null ? "" : talknotice.ToString().Replace("'", "");
+                        imageurl = imageurl == null ? "" : imageurl.ToString();
+
+                        obj = SqlHelper.ExecuteScalar("select tid from [wy_talk] where talkname='" + talkname + "'");
+                        if (obj == null)
+                        {
+                            obj = SqlHelper.ExecuteScalar("insert [wy_talk] (talkname,auth,createuid,info,talknotice,imageurl) values ('" + talkname + "','" + auth + "','" + uid + "','" + info + "','" + talknotice + "','" + imageurl + "');select scope_identity()");
+                            if (obj != null)
+                            {
+                                obj = SqlHelper.ExecuteScalar("select tid from [wy_talk] where talkname='" + talkname + "'");
+                                string tid = obj.ToString();
+                                SqlHelper.ExecuteNonQuery("insert [wy_talkuser] (tid,uid,xuhao) values (" + tid + "," + uid + ",'1')");
+                                string data = "{\"tid\":" + tid + ",\"talkname\":\"" + talkname + "\",\"auth\":\"" + auth + "\"}";
+                                SqlHelper.ExecuteNonQuery("UPDATE app_users SET  updatetime = GETDATE() WHERE uid = " + uid);
+
+                                #region 通知Goloz
+                                SendToGoloZTalkInfo(uid, tid, CommType.createUserTalk);
+                                #endregion
+
+                                recv = StandardObjectFormat(MessageCode.Success, data);
+                            }
+                            else
+                            {
+                                recv = StandardFormat(MessageCode.TalkCreateFaild);
+                            }
+                        }
+                        else
+                        {
+                            recv = StandardFormat(MessageCode.TalkExist);
+                        }
+                    }
+                    else
+                    {
+                        recv = StandardFormat(MessageCode.TalkInvalid);
+                    }
+                }
+                else
+                {
+                    recv = StandardFormat(MessageCode.TalkFull);
+                }
+            }
+            else
+            {
+                recv = StandardFormat(MessageCode.TalkVerificationFaild);
+            }
+            return recv;
+        }
+
+        private static bool SendToGoloZTalkInfo(int uid, string tid, short comm, bool hasCreate = true)
+        {
+            #region 通知Goloz
+            StringBuilder sb = new StringBuilder();
+            string sql = "";
+            if (hasCreate)
+                sql = "select T1.id,T1.tid,T1.xuhao,T1.duijiang,T1.remark,T2.talkname,T2.auth,T2.createuid,T2.usernum from (select id,tid,xuhao,duijiang,remark from [wy_talkuser] where uid =" + uid + " ) AS T1 INNER JOIN [wy_talk] AS T2 ON T1.tid = T2.tid  and T2.tid =" + tid;
+            else
+                sql = "select talkname,auth,createuid,usernum from [wy_talk]  WHERE tid=" + tid;
+            DataTable dt = SqlHelper.ExecuteTable(sql);
+            if (dt.Rows.Count < 1)
+            {
+                MediaService.WriteLog("执行异常：推送到Goloz的频道信息消息失败，uid=" + uid + " tid=" + tid, MediaService.wirtelog);
+                return false;
+            }
+            string xuhao = "";
+            string dj = "";
+            string remark = "";
+            if (hasCreate)
+            {
+                xuhao = dt.Rows[0]["xuhao"].ToString();
+                dj = dt.Rows[0]["duijiang"].ToString();
+                remark = dt.Rows[0]["remark"].ToString();
+            }
+            int totalnum = 0;
+            int usernum = 0;
+            GetTalkNum(Convert.ToInt32(tid), ref totalnum, ref usernum);
+            string auth = dt.Rows[0]["auth"].ToString();
+            string talkname = dt.Rows[0]["talkname"].ToString();
+            string create = "false";
+            if (dt.Rows[0]["createuid"].ToString() == uid.ToString() || totalnum <= 20)
+                create = "true";
+            sb.Append("{\"status\":true,\"tid\":" + tid + ",\"talkname\":\"" + talkname + "\",\"xuhao\":\"" + xuhao + "\",\"auth\":\"" + auth + "\",\"remark\":\"" + remark + "\",\"dj\":\"" + dj + "\",\"create\":" + create + ",\"usernum\":\"" + usernum + "\"}");
+
+            return PublicClass.SendToUser(null, sb.ToString(), "", uid, 99, 0, comm, APPID);
+            #endregion
+        }
+        #endregion
+
+        #region 获取我所加入的频道
+        /// <summary>
+        /// 获取我所加入的频道
+        /// </summary>
+        /// <param name="qs"></param>
+        /// <returns></returns>
+        public static string GetMyAllTalk(NameValueCollection qs)
+        {
+            /* NameValueCollection 值列表
+            * uid,appid,ouid,token,minitid
+            */
+
+            string recv = StandardFormat(MessageCode.MissKey);
+            if (qs == null || qs["ouid"] == null || qs["token"] == null || qs["appid"] == null || qs["uid"] == null || qs["minitid"] == null)
+            {
+                MediaService.WriteLog("接收到获取我所加入的频道 ：" + recv, MediaService.wirtelog);
+                return recv;
+            }
+            try
+            {
+                MediaService.WriteLog("接收到获取我所加入的频道 ：ouid =" + qs["ouid"].ToString() + "token =" + qs["token"].ToString() + "appid =" + qs["appid"].ToString() + "uid =" + qs["uid"].ToString() + "minitid =" + qs["minitid"].ToString(), MediaService.wirtelog);
+
+                int minitid;
+                if (!Int32.TryParse(qs["minitid"].ToString(), out minitid))
+                    return StandardFormat(MessageCode.FormatError);
+
+                int ouid = 0;
+                int uid = 0;
+                bool isVerToken = UniformVerification(qs["ouid"].ToString(), qs["uid"].ToString(), qs["appid"].ToString(), qs["token"].ToString(), ref ouid, ref uid, ref recv);
+                if (!isVerToken)
+                    return recv;
+
+                StringBuilder sb = new StringBuilder();
+                string sql = "";
+                if (minitid == 0)
+                {
+                    sql = "select T1.id,T1.tid,T1.xuhao,T1.duijiang,T1.remark,T2.talkname,T2.auth,T2.createuid,T2.usernum,T2.type,T2.imageurl from (select top 20 id,tid,xuhao,duijiang,remark from [wy_talkuser] where uid = " + uid + " order by id desc) AS T1 INNER JOIN [wy_talk] AS T2 ON T1.tid = T2.tid order by T1.id desc";
+                }
+                else
+                {
+                    sql = "select T1.id,T1.tid,T1.xuhao,T1.duijiang,T1.remark,T2.talkname,T2.auth,T2.createuid,T2.usernum,T2.type,T2.imageurl from (select top 20 id,tid,xuhao,duijiang,remark from [wy_talkuser] where uid = " + uid + " and id<" + minitid + " order by id desc) AS T1 INNER JOIN [wy_talk] AS T2 ON T1.tid = T2.tid order by T1.id desc";
+                }
+                DataTable dt = SqlHelper.ExecuteTable(sql);
+                for (int i = 0; i < dt.Rows.Count; i++)
+                {
+                    string tid = dt.Rows[i]["tid"].ToString();
+                    string talkname = dt.Rows[i]["talkname"].ToString();
+                    string auth = dt.Rows[i]["auth"].ToString();
+                    string remark = dt.Rows[i]["remark"].ToString();
+                    string create = "false";
+                    if (dt.Rows[i]["createuid"].ToString() == uid.ToString())
+                    {
+                        create = "true";
+                    }
+                    string imageurl = dt.Rows[i]["imageurl"] == null ? "" : dt.Rows[i]["imageurl"].ToString();
+                    string type = dt.Rows[i]["type"].ToString();
+                    int totalnum = 0;
+                    int usernum = 0;
+                    GetTalkNum(Convert.ToInt32(tid), ref totalnum, ref usernum);
+                    sb.Append(",{\"tid\":" + tid + ",\"talkname\":\"" + talkname + "\",\"auth\":\"" + auth + "\",\"remark\":\"" + remark + "\",\"create\":" + create + ",\"usernum\":" + usernum + ",\"totalnum\":" + totalnum + ",\"imageurl\":\"" + imageurl + "\",\"type\":\"" + type + "\"}");
+                }
+                if (dt.Rows.Count > 0)
+                {
+                    minitid = Int32.Parse(dt.Rows[dt.Rows.Count - 1]["id"].ToString());
+                    sb.Remove(0, 1);
+                }
+                sb.Insert(0, "{\"minitid\":" + minitid + ",\"list\":[");
+                sb.Append("]}");
+                return StandardObjectFormat(MessageCode.Success, sb.ToString());
+            }
+            catch (Exception e)
+            {
+                MediaService.WriteLog("执行异常：" + e.ToString(), MediaService.wirtelog);
+                return StandardFormat(MessageCode.DefaultError, e.Message);
+            }
+        }
+
+        #endregion
+
+        #region 获取所在区域的公共频道
+        //areaid 城市id（区域号），
+        //senduid ，允许说话的用户id，0，允许所有人发言，-1，不允许所有人发言  
+        //audiourl  :直播地址，
+        //uploadurl  上传地址，dj，0，用户不在当前频道，1用户在当前频道
+
+        /// <summary>
+        /// 获取所在区域的公共频道
+        /// </summary>
+        /// <param name="qs"></param>
+        /// <returns></returns>
+        public static string GetCurrentRadio(NameValueCollection qs)
+        {
+            /* NameValueCollection 值列表
+            * uid,appid,ouid,token,areaid
+            */
+
+            string recv = StandardFormat(MessageCode.MissKey);
+            if (qs == null || qs["ouid"] == null || qs["token"] == null || qs["appid"] == null || qs["uid"] == null || qs["areaid"] == null)
+            {
+                MediaService.WriteLog("接收到获取所在区域的公共频道 ：" + recv, MediaService.wirtelog);
+                return recv;
+            }
+            try
+            {
+                MediaService.WriteLog("接收到获取所在区域的公共频道 ：ouid =" + qs["ouid"].ToString() + "token =" + qs["token"].ToString() + "appid =" + qs["appid"].ToString() + "uid =" + qs["uid"].ToString() + "areaid =" + qs["areaid"].ToString(), MediaService.wirtelog);
+
+                int areaid;
+                if (!Int32.TryParse(qs["areaid"].ToString(), out areaid))
+                    return StandardFormat(MessageCode.FormatError);
+
+                int ouid = 0;
+                int uid = 0;
+                bool isVerToken = UniformVerification(qs["ouid"].ToString(), qs["uid"].ToString(), qs["appid"].ToString(), qs["token"].ToString(), ref ouid, ref uid, ref recv);
+                if (!isVerToken)
+                    return recv;
+                object obj = SqlHelper.ExecuteScalar("select pradio from [app_users] where uid='" + qs["uid"].ToString().Replace("'", "") + "'");
+                if (obj != null)
+                {
+                    string pradio = obj.ToString() + ",";
+                    StringBuilder sb = new StringBuilder();
+                    string sql = "SELECT rid,channelname,producer,compere,imageurl,radiotype,thumburl,flashimageurl FROM wy_radio WHERE (areaid = " + areaid + " or areaid =0) and radiotype >0";
+                    DataTable dt = SqlHelper.ExecuteTable(sql);
+                    for (int i = 0; i < dt.Rows.Count; i++)
+                    {
+                        string rid = dt.Rows[i]["rid"].ToString();
+                        string channelname = dt.Rows[i]["channelname"].ToString();
+                        string producer = dt.Rows[i]["producer"].ToString();
+                        string compere = dt.Rows[i]["compere"].ToString();
+                        string imageurl = dt.Rows[i]["imageurl"].ToString();
+                        string radiotype = dt.Rows[i]["radiotype"].ToString();
+                        string thumburl = dt.Rows[i]["thumburl"] == null ? "" : dt.Rows[i]["thumburl"].ToString();
+                        string flashImageUrl = dt.Rows[i]["flashimageurl"].ToString();
+                        if (radiotype != "2" || pradio.IndexOf(rid + ",") >= 0)
+                        {
+                            sb.Append(",{\"rid\":" + rid + ",\"channelname\":\"" + channelname + "\",\"producer\":\"" + producer + "\",\"compere\":\"" + compere + "\",\"totalnum\":" + 0 + ",\"usernum\":" + 0 + ",\"imageurl\":\"" + imageurl + "\",\"thumburl\":\"" + thumburl + "\",\"flashimageurl\":\"" + flashImageUrl + "\"}");
+                        }
+                    }
+                    if (dt.Rows.Count > 0)
+                    {
+                        sb.Remove(0, 1);
+                    }
+                    return StandardListFormat(MessageCode.Success, sb.ToString());
+                }
+                else
+                {
+                    return StandardFormat(MessageCode.TalkNotExist);
+                }
+            }
+            catch (Exception e)
+            {
+                MediaService.WriteLog("执行异常：" + e.ToString(), true);
+                return StandardFormat(MessageCode.DefaultError, e.Message);
+            }
+        }
+        #endregion
+
+        #region 获取热门公共频道
+        /// <summary>
+        /// 获取热门公共频道
+        /// </summary>
+        /// <param name="qs"></param>
+        /// <returns></returns>
+        public static string GetPopRadio(NameValueCollection qs)
+        {
+            /* NameValueCollection 值列表
+            * uid,appid,ouid,token
+            */
+
+            string recv = StandardFormat(MessageCode.MissKey);
+            if (qs == null || qs["ouid"] == null || qs["token"] == null || qs["appid"] == null || qs["uid"] == null)
+            {
+                MediaService.WriteLog("接收到获取热门公共频道 ：" + recv, MediaService.wirtelog);
+                return recv;
+            }
+            try
+            {
+                MediaService.WriteLog("接收到获取热门公共频道 ：ouid =" + qs["ouid"].ToString() + "token =" + qs["token"].ToString() + "appid =" + qs["appid"].ToString() + "uid =" + qs["uid"].ToString(), MediaService.wirtelog);
+
+                int ouid = 0;
+                int uid = 0;
+                bool isVerToken = UniformVerification(qs["ouid"].ToString(), qs["uid"].ToString(), qs["appid"].ToString(), qs["token"].ToString(), ref ouid, ref uid, ref recv);
+                if (!isVerToken)
+                    return recv;
+
+                StringBuilder sb = new StringBuilder();
+                string sql = "select * from wy_radio where radiotype=1";
+                DataTable dt = SqlHelper.ExecuteTable(sql);
+                for (int i = 0; i < dt.Rows.Count; i++)
+                {
+                    string rid = dt.Rows[i]["rid"].ToString();
+                    string channelname = dt.Rows[i]["channelname"].ToString();
+                    string producer = dt.Rows[i]["producer"].ToString();
+                    string compere = dt.Rows[i]["compere"].ToString();
+                    string imageurl = dt.Rows[i]["imageurl"].ToString();
+                    string radiotype = dt.Rows[i]["radiotype"].ToString();
+                    string thumburl = dt.Rows[i]["thumburl"] == null ? "" : dt.Rows[i]["thumburl"].ToString();
+                    string flashImageUrl = dt.Rows[i]["flashimageurl"].ToString();
+
+                    sb.Append(",{\"rid\":" + rid + ",\"channelname\":\"" + channelname + "\",\"producer\":\"" + producer + "\",\"compere\":\"" + compere + "\",\"totalnum\":" + 0 + ",\"usernum\":" + 0 + ",\"imageurl\":\"" + imageurl + "\",\"thumburl\":\"" + thumburl + "\",\"flashimageurl\":\"" + flashImageUrl + "\"}");
+                }
+                if (dt.Rows.Count > 0)
+                {
+                    sb.Remove(0, 1);
+                }
+                return StandardListFormat(MessageCode.Success, sb.ToString());
+            }
+            catch (Exception e)
+            {
+                MediaService.WriteLog("执行异常：" + e.ToString(), true);
+                return StandardFormat(MessageCode.DefaultError, e.Message);
+            }
+        }
+        #endregion
+
+        #region 用户加入频道
+        /// <summary>
+        /// 用户加入频道
+        /// </summary>
+        /// <param name="qs"></param>
+        /// <returns></returns>
+        public static string UserJoinTalk(NameValueCollection qs)
+        {
+            /* NameValueCollection 值列表
+            * uid,appid,ouid,token,talkname,[auth]
+            */
+
+            string recv = StandardFormat(MessageCode.MissKey);
+            if (qs == null || qs["ouid"] == null || qs["token"] == null || qs["appid"] == null || qs["uid"] == null || qs["talkname"] == null)
+            {
+                MediaService.WriteLog("接收到用户加入频道 ：" + recv, MediaService.wirtelog);
+                return recv;
+            }
+            try
+            {
+                MediaService.WriteLog("接收到用户加入频道 ：ouid =" + qs["ouid"].ToString() + "token =" + qs["token"].ToString() + "appid =" + qs["appid"].ToString() + "uid =" + qs["uid"].ToString() + "talkname =" + qs["talkname"].ToString(), MediaService.wirtelog);
+
+                int ouid = 0;
+                int uid = 0;
+                bool isVerToken = UniformVerification(qs["ouid"].ToString(), qs["uid"].ToString(), qs["appid"].ToString(), qs["token"].ToString(), ref ouid, ref uid, ref recv);
+                if (!isVerToken)
+                    return recv;
+
+                string auth = qs["auth"] == null ? "" : qs["auth"].Replace("'", "");
+                string talkname = qs["talkname"] == null ? "" : qs["talkname"].Replace("'", "");
+
+                if (PublicClass.FindTalkType(talkname) == 2)
+                {
+                    return StandardFormat(MessageCode.TalkJoinFaild);
+                }
+                return UserJoinTalk(talkname, auth, uid);
+            }
+            catch (Exception e)
+            {
+                MediaService.WriteLog("执行异常：" + e.ToString(), MediaService.wirtelog);
+                return StandardFormat(MessageCode.DefaultError, e.Message);
+            }
+        }
+
+        /// <summary>
+        /// GoloZ用户加入频道
+        /// </summary>
+        /// <param name="qs"></param>
+        /// <returns></returns>
+        public static string GoloZUserJoinTalk(NameValueCollection qs)
+        {
+            /* NameValueCollection 值列表
+            * sn,talkname,[auth]
+            */
+
+            string recv = StandardFormat(MessageCode.MissKey);
+            if (qs == null || qs["sn"] == null || qs["talkname"] == null)
+            {
+                MediaService.WriteLog("接收到GoloZ用户加入频道 ：" + recv, MediaService.wirtelog);
+                return recv;
+            }
+            try
+            {
+                MediaService.WriteLog("接收到GoloZ用户加入频道 ：sn =" + qs["sn"].ToString() + "&talkname =" + qs["talkname"].ToString(), MediaService.wirtelog);
+
+                string sn = qs["sn"].ToString().Replace("'", "");
+                string sql = "select uid from app_users where glsn='" + GetUniform12(sn) + "'";
+                object obj = SqlHelper.ExecuteScalar(sql);
+                if (obj == null)
+                    return StandardFormat(MessageCode.DeviceNotExist);
+                int uid = (int)obj;
+
+                string auth = qs["auth"] == null ? "" : qs["auth"].Replace("'", "");
+                string talkname = qs["talkname"] == null ? "" : qs["talkname"].Replace("'", "");
+
+                if (PublicClass.FindTalkType(talkname) == 2)
+                {
+                    return StandardFormat(MessageCode.TalkJoinFaild);
+                }
+
+                StringBuilder sb = new StringBuilder();
+                string sqltalkname = "select tid,auth from wy_talk where talkname='" + talkname + "'";
+                DataTable dt = SqlHelper.ExecuteTable(sqltalkname);
+                if (dt.Rows.Count < 1)
+                    return StandardFormat(MessageCode.TalkNotExist);
+
+                string stid = dt.Rows[0]["tid"].ToString();
+                string sauth = dt.Rows[0]["auth"].ToString();
+                if (sauth != auth)
+                    return StandardFormat(MessageCode.TalkVerificationFaild);
+                bool isSucceed = SendToGoloZTalkInfo(uid, stid, CommType.forceUserJoinTalk, false);
+                if (!isSucceed)
+                    return StandardFormat(MessageCode.TalkJoinFaild);
+                return StandardFormat(MessageCode.Success);
+            }
+            catch (Exception e)
+            {
+                MediaService.WriteLog("执行异常：" + e.ToString(), MediaService.wirtelog);
+                return StandardFormat(MessageCode.DefaultError, e.Message);
+            }
+        }
+
+        internal static string UserJoinTalk(string talkname, string auth, int uid, short comm = CommType.userJoinPersonTalk)
+        {
+            string data = PublicClass.JoinTalk(uid, auth, talkname);
+            string status = GetJsonValue(data, "status", ",", false);
+            string message = GetJsonValue(data, "message", "\"", true);
+            if (status == "false")
+                return StandardFormat(MessageCode.TalkJoinFaild, message);
+
+            #region 获取频道信息
+            string tid = "";
+            StringBuilder sb = new StringBuilder();
+            string sql = "select T1.id,T1.tid,T1.xuhao,T1.duijiang,T1.remark,T2.talkname,T2.auth,T2.createuid,T2.usernum,T2.imageurl,T2.type from (select top 20 id,tid,xuhao,duijiang,remark from [wy_talkuser] where uid = " + uid + " order by id desc) AS T1 INNER JOIN [wy_talk] AS T2 ON T1.tid = T2.tid and T2.talkname='" + talkname + "' order by T1.id desc";
+            DataTable dt = SqlHelper.ExecuteTable(sql);
+            if (dt.Rows.Count < 1)
+                return StandardFormat(MessageCode.TalkJoinFaild, message);
+
+            tid = dt.Rows[0]["tid"].ToString();
+            talkname = dt.Rows[0]["talkname"].ToString();
+            auth = dt.Rows[0]["auth"].ToString();
+            string remark = dt.Rows[0]["remark"].ToString();
+            string create = "false";
+            if (dt.Rows[0]["createuid"].ToString() == uid.ToString())
+                create = "true";
+            string imageurl = dt.Rows[0]["imageurl"] == null ? "" : dt.Rows[0]["imageurl"].ToString();
+            string type = dt.Rows[0]["type"].ToString();
+            int totalnum = 0;
+            int usernum = 0;
+            GetTalkNum(Convert.ToInt32(tid), ref totalnum, ref usernum);
+            sb.Append("{\"tid\":" + tid + ",\"talkname\":\"" + talkname + "\",\"auth\":\"" + auth + "\",\"remark\":\"" + remark + "\",\"create\":" + create + ",\"usernum\":" + usernum + ",\"totalnum\":" + totalnum + ",\"imageurl\":\"" + imageurl + "\",\"type\":\"" + type + "\"}");
+            #endregion
+
+            //通知Goloz
+            if (!string.IsNullOrWhiteSpace(tid))
+                SendToGoloZTalkInfo(uid, tid, comm);
+            else
+                MediaService.WriteLog("用户加入频道推送到GoloZ消息失败。", MediaService.wirtelog);
+
+            return StandardObjectFormat(MessageCode.Success, sb.ToString());
+        }
+
+        /// <summary>
+        /// 新-用户加入频道
+        /// </summary>
+        /// <param name="qs"></param>
+        /// <returns></returns>
+        public static string NewUserJoinTalk(NameValueCollection qs)
+        {
+            /* NameValueCollection 值列表
+            * uid,appid,ouid,token,talkname,[auth]
+            */
+
+            string recv = StandardFormat(MessageCode.MissKey);
+            if (qs == null || qs["ouid"] == null || qs["token"] == null || qs["appid"] == null || qs["uid"] == null || qs["talkname"] == null)
+            {
+                MediaService.WriteLog("接收到NewUserJoinTalk ：" + recv, MediaService.wirtelog);
+                return recv;
+            }
+            try
+            {
+                MediaService.WriteLog("接收到NewUserJoinTalk ：ouid =" + qs["ouid"] + "token =" + qs["token"] + "appid =" + qs["appid"] + "uid =" + qs["uid"] + "talkname =" + qs["talkname"], MediaService.wirtelog);
+
+                int ouid = 0;
+                int uid = 0;
+                bool isVerToken = UniformVerification(qs["ouid"], qs["uid"], qs["appid"], qs["token"], ref ouid, ref uid, ref recv);
+                if (!isVerToken)
+                    return recv;
+
+                string auth = qs["auth"] == null ? "" : qs["auth"].Replace("'", "");
+                string talkname = qs["talkname"] == null ? "" : qs["talkname"].Replace("'", "");
+
+                if (PublicClass.FindTalkType(talkname) == 2)
+                {
+                    return StandardFormat(MessageCode.TalkJoinFaild, "目标为私人频道");
+                }
+
+                #region return UserJoinTalk(talkname, auth, uid)
+
+                int repeatJoin = 0;
+                #region PublicClass.JoinTalk(uid, auth, talkname)
+                DataTable dt = SqlHelper.ExecuteTable("select tid,auth from [wy_talk] where talkname='" + talkname + "'");
+                string tid;
+                if (dt.Rows.Count > 0)
+                {
+                    tid = dt.Rows[0]["tid"].ToString();
+                    if (dt.Rows[0]["auth"].ToString() == "" || dt.Rows[0]["auth"].ToString() == auth)
+                    {
+                        Object obj = SqlHelper.ExecuteScalar("select 1 from [wy_talkuser] where tid=" + tid + " and uid=" + uid);
+                        if (obj != null)
+                        {
+                            SqlHelper.ExecuteNonQuery("insert [wy_talkuser] (tid,uid) values (" + tid + "," + uid + ");update [wy_talk] set usernum=usernum+1 where tid=" + tid);
+                            repeatJoin = 0;
+                        }
+                        else
+                        {
+                            repeatJoin = 1;
+                        }
+                    }
+                    else
+                    {
+                        if (auth == "")
+                            return StandardFormat(MessageCode.TalkVerificationFaild, "需要输入群组验证码");
+                        else
+                            return StandardFormat(MessageCode.TalkVerificationFaild, "输入的群组验证码错误");
+                    }
+                }
+                else
+                {
+                    return StandardFormat(MessageCode.TalkNotExist);
+                }
+
+                #endregion
+
+                //string message = GetJsonValue(data, "message", "\"", true);
+
+                #region 获取频道信息
+                tid = "";
+                StringBuilder sb = new StringBuilder();
+                string sql = "select T1.id,T1.tid,T1.xuhao,T1.duijiang,T1.remark,T2.talkname,T2.auth,T2.createuid,T2.usernum,T2.imageurl,T2.[type],T1.sharelocation from (select top 20 id,tid,xuhao,duijiang,remark,sharelocation from [wy_talkuser] where [uid] = " + uid + " order by id desc) AS T1 INNER JOIN [wy_talk] AS T2 ON T1.tid = T2.tid and T2.talkname='" + talkname + "' order by T1.id desc";
+                dt = SqlHelper.ExecuteTable(sql);
+                if (dt.Rows.Count < 1)
+                    return StandardFormat(MessageCode.TalkJoinFaild);
+
+                tid = dt.Rows[0]["tid"].ToString();
+                talkname = dt.Rows[0]["talkname"].ToString();
+                auth = dt.Rows[0]["auth"].ToString();
+                string remark = dt.Rows[0]["remark"].ToString();
+                string create = "false";
+                if (dt.Rows[0]["createuid"].ToString() == uid.ToString())
+                    create = "true";
+                string imageurl = dt.Rows[0]["imageurl"] == null ? "" : dt.Rows[0]["imageurl"].ToString();
+                string type = dt.Rows[0]["type"].ToString();
+                int sharelocation;
+                int.TryParse(dt.Rows[0]["sharelocation"].ToString(), out sharelocation);
+                int totalnum = 0;
+                int usernum = 0;
+                GetTalkNum(Convert.ToInt32(tid), ref totalnum, ref usernum);
+                sb.Append("{\"tid\":" + tid + ",\"talkname\":\"" + talkname + "\",\"auth\":\"" + auth + "\",\"remark\":\"" + remark + "\",\"create\":" + create + ",\"usernum\":" + usernum + ",\"totalnum\":" + totalnum + ",\"imageurl\":\"" + imageurl + "\",\"type\":\"" + type + "\",\"sharelocation\":" + sharelocation + ",\"repeatjoin\":" + repeatJoin + "}");
+                #endregion
+
+                //通知Goloz
+                if (!string.IsNullOrWhiteSpace(tid))
+                    SendToGoloZTalkInfo(uid, tid, CommType.userJoinPersonTalk);
+                else
+                    MediaService.WriteLog("用户加入频道推送到GoloZ消息失败。", MediaService.wirtelog);
+
+                return StandardObjectFormat(MessageCode.Success, sb.ToString());
+                #endregion
+            }
+            catch (Exception e)
+            {
+                MediaService.WriteLog("执行异常：" + e.ToString(), MediaService.wirtelog);
+                return StandardFormat(MessageCode.DefaultError, e.Message);
+            }
+        }
+        #endregion
+
+        #region 修改频道的信息
+        /// <summary>
+        /// 修改频道的信息
+        /// </summary>
+        /// <param name="qs"></param>
+        /// <returns></returns>
+        public static string ModifyTalkMessage(NameValueCollection qs)
+        {
+            /* NameValueCollection 值列表
+            * uid,appid,ouid,token,tid,[auth],[remark]
+            */
+
+            string recv = StandardFormat(MessageCode.MissKey);
+            if (qs == null || qs["ouid"] == null || qs["token"] == null || qs["appid"] == null || qs["uid"] == null || qs["tid"] == null)
+            {
+                MediaService.WriteLog("接收到修改频道的信息 ：" + recv, MediaService.wirtelog);
+                return recv;
+            }
+            try
+            {
+                MediaService.WriteLog("接收到修改频道的信息 ：ouid =" + qs["ouid"].ToString() + "token =" + qs["token"].ToString() + "appid =" + qs["appid"].ToString() + "uid =" + qs["uid"].ToString() + "tid =" + qs["tid"].ToString(), MediaService.wirtelog);
+
+                int ouid = 0;
+                int uid = 0;
+                bool isVerToken = UniformVerification(qs["ouid"].ToString(), qs["uid"].ToString(), qs["appid"].ToString(), qs["token"].ToString(), ref ouid, ref uid, ref recv);
+                if (!isVerToken)
+                    return recv;
+
+                string tid = qs["tid"].ToString().Replace("'", "");
+                object obj = SqlHelper.ExecuteScalar("select auth from [wy_talk] where tid='" + tid + "' and createuid=" + uid);
+                StringBuilder sb = new StringBuilder();
+                sb.Append("{\"status\":true,\"tid\":" + tid);
+                if (obj != null)
+                {
+                    if (qs["auth"] != null)
+                    {
+                        string auth = qs["auth"].ToString().Replace(",", "");
+                        if ((auth.Length == 3 && CommBusiness.IsValiNum(auth) && obj.ToString() != auth) || (auth == ""))
+                        {
+                            SqlHelper.ExecuteNonQuery("update [wy_talk] set auth='" + qs["auth"].Replace("'", "") + "',usernum=1 where tid='" + tid + "';delete [wy_talkuser] where tid='" + tid + "' and uid!='" + uid + "'");
+                            SqlHelper.ExecuteNonQuery("UPDATE app_users SET  updatetime = GETDATE() WHERE uid = " + uid);
+                            sb.Append(",\"auth\":\"" + auth + "\"");
+                        }
+                        TalkMessage talkmessage = null;
+                        if (MediaService.talkDic.TryRemove(Int32.Parse(tid), out talkmessage))
+                        {
+                            UserObject uo = null;
+                            foreach (int oruid in talkmessage.uidlist)
+                            {
+                                if (uid != oruid)
+                                {
+                                    try
+                                    {
+                                        if (MediaService.userDic.TryGetValue(oruid, out uo))
+                                        {
+                                            if (uo.socket != null && uo.socket[APPID] != null)
+                                            {
+                                                if (uo.socket[APPID].Connected)
+                                                {
+                                                    byte[] b = new byte[12];
+                                                    Buffer.BlockCopy(System.BitConverter.GetBytes((short)12), 0, b, 0, 2);
+                                                    Buffer.BlockCopy(System.BitConverter.GetBytes(CommType.userNotInTalk), 0, b, 2, 2);
+                                                    Buffer.BlockCopy(System.BitConverter.GetBytes(0), 0, b, 4, 4);
+                                                    Buffer.BlockCopy(System.BitConverter.GetBytes(Int32.Parse(tid)), 0, b, 8, 4);
+                                                    uo.socket[APPID].Send(b, SocketFlags.None);
+                                                }
+                                            }
+                                        }
+                                    }
+                                    catch { }
+                                }
+                            }
+                        }
+                    }
+                }
+                if (qs["remark"] != null)
+                {
+                    sb.Append(",\"remark\":\"" + qs["remark"].ToString().Replace("'", "") + "\"");
+                    SqlHelper.ExecuteNonQuery("update [wy_talkuser] set remark='" + qs["remark"].Replace("'", "").Trim() + "' where tid=" + tid + " and uid=" + uid);
+                }
+
+                sb.Append("}");
+                PublicClass.SendToOnlineUserList(null, sb.ToString(), "", new List<int>() { uid }, 99, 0, CommType.modifyUserTalk, APPID);
+                return StandardFormat(MessageCode.Success);
+            }
+            catch (Exception e)
+            {
+                MediaService.WriteLog("执行异常：" + e.ToString(), MediaService.wirtelog);
+                return StandardFormat(MessageCode.DefaultError, e.Message);
+            }
+        }
+        #endregion
+
+        #region 解除我的频道/退出我所加入的频道
+        /// <summary>
+        /// 解除我的频道/退出我所加入的频道
+        /// </summary>
+        /// <param name="qs"></param>
+        /// <returns></returns>
+        public static string UserQuitTalk(NameValueCollection qs)
+        {
+            /* NameValueCollection 值列表
+            * uid,appid,ouid,token,tid
+            */
+
+            string recv = StandardFormat(MessageCode.MissKey);
+            if (qs == null || qs["ouid"] == null || qs["token"] == null || qs["appid"] == null || qs["uid"] == null || qs["tid"] == null)
+            {
+                MediaService.WriteLog("接收到解除我的频道/退出我所加入的频道 ：" + recv, MediaService.wirtelog);
+                return recv;
+            }
+            try
+            {
+                MediaService.WriteLog("接收到解除我的频道/退出我所加入的频道 ：ouid =" + qs["ouid"].ToString() + "token =" + qs["token"].ToString() + "appid =" + qs["appid"].ToString() + "uid =" + qs["uid"].ToString() + "tid =" + qs["tid"].ToString(), MediaService.wirtelog);
+
+                int ouid = 0;
+                int uid = 0;
+                bool isVerToken = UniformVerification(qs["ouid"].ToString(), qs["uid"].ToString(), qs["appid"].ToString(), qs["token"].ToString(), ref ouid, ref uid, ref recv);
+                if (!isVerToken)
+                    return recv;
+
+                //1.查询该频道是否存在
+                //2.不存在：返回告知该频道不存在
+                //3.存在,判定该用户是否在该频道里面
+                //4.如果用户不在在wy_talkuser 里面，删除wy_talk中的数据
+                //5.如果用户在wy_talkuser里面,判定是否是自己创建的频道
+                //6.是自己创建的频道：该频道信息从wy_talk表中删除；同时删除wy_talkuser tid =wy_talk.tid
+                //7.不是自己创建的频道：该频道信息从wy_talkuser tid =wy_talk.tid  and uid = uid 中删除 , wy_talk.usernum-1
+                int tid;
+                if (!Int32.TryParse(qs["tid"].ToString(), out tid))
+                    return StandardFormat(MessageCode.FormatError);
+
+                if (PublicClass.FindTalkType(tid) == 2)
+                {
+                    return StandardFormat(MessageCode.TalkNotExist);
+                }
+
+                return UserQuitTalk(tid, uid);
+            }
+            catch (Exception e)
+            {
+                MediaService.WriteLog("执行异常：" + e.ToString(), MediaService.wirtelog);
+                return StandardFormat(MessageCode.DefaultError, e.Message);
+            }
+        }
+
+        internal static string UserQuitTalk(int tid, int uid)
+        {
+            StringBuilder sb = new StringBuilder();
+            sb.Append("SELECT createuid FROM wy_talk WHERE tid = " + tid);
+            object result = SqlHelper.ExecuteScalar(sb.ToString());
+            if (result == null)
+                return StandardFormat(MessageCode.TalkNotExist);
+            int cuid = (int)result;
+
+            sb.Clear();
+            sb.Append("SELECT count(*) FROM wy_talkuser,wy_talk WHERE wy_talk.tid=wy_talkuser.tid AND wy_talk.tid = " + tid + " AND wy_talkuser.uid=" + uid);
+            result = SqlHelper.ExecuteScalar(sb.ToString());
+            if (result != null && ((int)result) > 0)
+            {
+                if (cuid == uid)
+                {
+                    sb.Clear();
+                    List<int> uids = new List<int>();
+                    sb.Append("SELECT uid FROM wy_talkuser where tid=" + tid);
+                    DataTable uidlist = SqlHelper.ExecuteTable(sb.ToString());
+                    if (uidlist != null && uidlist.Rows.Count > 0)
+                    {
+                        foreach (DataRow dr in uidlist.Rows)
+                        {
+                            uids.Add(Convert.ToInt32(dr["uid"].ToString()));
+                        }
+                    }
+                    sb.Clear();
+                    sb.Append("delete [wy_talk] where tid='" + tid + "';");
+                    sb.Append("delete [wy_talkuser] where tid='" + tid + "';");
+                    sb.Append("UPDATE app_users SET  updatetime = GETDATE() WHERE uid = " + uid);
+                    SqlHelper.ExecuteNonQuery(sb.ToString());
+
+                    TalkMessage talkmessage = null;
+                    if (MediaService.talkDic.TryRemove(tid, out talkmessage))
+                    {
+                        foreach (int oruid in uids)
+                        {
+                            try
+                            {
+                                UserObject uo = null;
+                                if (MediaService.userDic.TryGetValue(oruid, out uo))
+                                {
+                                    if (uo.socket != null && uo.socket[APPID] != null)
+                                    {
+                                        if (uo.socket[APPID].Connected)
+                                        {
+                                            byte[] b = new byte[12];
+                                            Buffer.BlockCopy(System.BitConverter.GetBytes((short)12), 0, b, 0, 2);
+                                            Buffer.BlockCopy(System.BitConverter.GetBytes(CommType.userNotInTalk), 0, b, 2, 2);
+                                            Buffer.BlockCopy(System.BitConverter.GetBytes(0), 0, b, 4, 4);
+                                            Buffer.BlockCopy(System.BitConverter.GetBytes(tid), 0, b, 8, 4);
+                                            uo.socket[APPID].Send(b, SocketFlags.None);
+                                        }
+                                    }
+                                }
+                            }
+                            catch { }
+                        }
+                    }
+                }
+                else
+                {
+                    sb.Clear();
+                    sb.Append("UPDATE wy_talk SET usernum=usernum-1 WHERE tid =' " + tid + "';");
+                    sb.Append("delete [wy_talkuser] where tid='" + tid + "' and uid=" + uid + ";");
+                    sb.Append("UPDATE app_users SET  updatetime = GETDATE() WHERE uid = " + uid);
+                    SqlHelper.ExecuteNonQuery(sb.ToString());
+                    UserObject uo = null;
+                    if (MediaService.userDic.TryGetValue(uid, out uo))
+                    {
+                        if (uo.socket != null && uo.socket[APPID] != null)
+                        {
+                            if (uo.socket[APPID].Connected)
+                            {
+                                byte[] b = new byte[12];
+                                Buffer.BlockCopy(System.BitConverter.GetBytes((short)12), 0, b, 0, 2);
+                                Buffer.BlockCopy(System.BitConverter.GetBytes(CommType.userNotInTalk), 0, b, 2, 2);
+                                Buffer.BlockCopy(System.BitConverter.GetBytes(0), 0, b, 4, 4);
+                                Buffer.BlockCopy(System.BitConverter.GetBytes(tid), 0, b, 8, 4);
+                                uo.socket[APPID].Send(b, SocketFlags.None);
+                            }
+                        }
+                    }
+                }
+                SqlHelper.ExecuteNonQuery("UPDATE app_users SET  updatetime = GETDATE() WHERE uid = " + uid);
+
+                string recv = "{\"status\":true,\"tid\":" + tid + ",\"createuid\":" + cuid + "}";
+                PublicClass.SendToOnlineUserList(null, recv, "", new List<int>() { uid }, 99, 0, CommType.userQuitTalk, APPID);
+            }
+            return StandardFormat(MessageCode.Success);
+        }
+        #endregion
+
+        #region 修改频道图片地址
+        /// <summary>
+        /// 修改频道图片地址
+        /// </summary>
+        /// <param name="qs"></param>
+        /// <returns></returns>
+        public static string ModifyImageURL(NameValueCollection qs)
+        {
+            /* NameValueCollection 值列表
+            * appid,ouid,token,imageurl
+            */
+
+            string recv = StandardFormat(MessageCode.MissKey);
+            if (qs == null || qs["ouid"] == null || qs["token"] == null || qs["appid"] == null || qs["imageurl"] == null)
+            {
+                MediaService.WriteLog("接收到修改频道的信息 ：" + recv, MediaService.wirtelog);
+                return recv;
+            }
+            try
+            {
+                MediaService.WriteLog("接收到修改频道的信息 ：ouid =" + qs["ouid"].ToString() + "&token =" + qs["token"].ToString() + "&appid =" + qs["appid"].ToString() + "&imageurl =" + qs["imageurl"].ToString(), MediaService.wirtelog);
+
+                int ouid = 0;
+                bool isVerToken = UniformVerification(qs["ouid"].ToString(), qs["appid"].ToString(), qs["token"].ToString(), ref ouid, ref recv);
+                if (!isVerToken)
+                    return recv;
+
+                string imageurl = qs["imageurl"].Replace("'", "");
+                string sql = string.Format("update wy_talk set wy_talk.imageurl='{0}' from wy_talk,wy_uidmap where wy_talk.createuid=wy_uidmap.uid and wy_uidmap.ouid={1}", imageurl, ouid);
+                object obj = SqlHelper.ExecuteNonQuery(sql);
+                //if (obj == null || ((int)obj) < 1)
+                //    return StandardFormat(MessageCode.UpdateFaild);
+                return StandardFormat(MessageCode.Success);
+            }
+            catch (Exception e)
+            {
+                MediaService.WriteLog("执行异常：" + e.ToString(), MediaService.wirtelog);
+                return StandardFormat(MessageCode.DefaultError, e.Message);
+            }
+        }
+        #endregion
+
+        #region 获取电台列表
+        /// <summary>
+        /// 获取电台列表
+        /// </summary>
+        /// <param name="qs"></param>
+        /// <returns></returns>
+        public static string GetRadioStation(NameValueCollection qs)
+        {
+            /* NameValueCollection 值列表
+            * appid,ouid,token
+            */
+
+            string recv = StandardFormat(MessageCode.MissKey);
+            if (qs == null || qs["ouid"] == null || qs["token"] == null || qs["appid"] == null)
+            {
+                MediaService.WriteLog("接收到GetRadioStation ：" + recv, MediaService.wirtelog);
+                return recv;
+            }
+            try
+            {
+                MediaService.WriteLog("接收到GetRadioStation ：ouid =" + qs["ouid"] + "token =" + qs["token"] + "appid =" + qs["appid"], MediaService.wirtelog);
+
+                int ouid = 0;
+                bool isVerToken = UniformVerification(qs["ouid"], qs["appid"], qs["token"], ref ouid,  ref recv);
+                if (!isVerToken)
+                    return recv;
+
+                StringBuilder sb = new StringBuilder();
+                string sql = "select * from wy_radio where radiotype=3";
+                DataTable dt = SqlHelper.ExecuteTable(sql);
+                for (int i = 0; i < dt.Rows.Count; i++)
+                {
+                    string rid = dt.Rows[i]["rid"].ToString();
+                    string channelname = dt.Rows[i]["channelname"].ToString();
+                    string producer = dt.Rows[i]["producer"].ToString();
+                    string compere = dt.Rows[i]["compere"].ToString();
+                    string imageurl = dt.Rows[i]["imageurl"].ToString();
+                    string thumburl = dt.Rows[i]["thumburl"] == null ? "" : dt.Rows[i]["thumburl"].ToString();
+                    string flashImageUrl = dt.Rows[i]["flashimageurl"].ToString();
+
+                    sb.Append(",{\"rid\":" + rid + ",\"channelname\":\"" + channelname + "\",\"producer\":\"" + producer + "\",\"compere\":\"" + compere + "\",\"totalnum\":" + 0 + ",\"usernum\":" + 0 + ",\"imageurl\":\"" + imageurl + "\",\"thumburl\":\"" + thumburl + "\",\"flashimageurl\":\"" + flashImageUrl + "\"}");
+                }
+                if (dt.Rows.Count > 0)
+                {
+                    sb.Remove(0, 1);
+                }
+                return StandardListFormat(MessageCode.Success, sb.ToString());
+            }
+            catch (Exception e)
+            {
+                MediaService.WriteLog("执行异常：" + e.ToString(), true);
+                return StandardFormat(MessageCode.DefaultError, e.Message);
+            }
+        }
+        #endregion
+
+        #region 是否开启频道位置共享
+        /// <summary>
+        /// 是否开启频道位置共享
+        /// </summary>
+        /// <param name="qs"></param>
+        /// <returns></returns>
+        public static string SwitchShareLoc(NameValueCollection qs)
+        {
+            /* NameValueCollection 值列表
+            * uid,appid,ouid,token,tid,sharelocation
+            */
+
+            string recv = StandardFormat(MessageCode.MissKey);
+            if (qs == null || qs["ouid"] == null || qs["token"] == null || qs["appid"] == null || qs["uid"] == null || qs["tid"] == null || qs["sharelocation"] == null)
+            {
+                MediaService.WriteLog("接收到SwitchShareLoc ：" + recv, MediaService.wirtelog);
+                return recv;
+            }
+            try
+            {
+                MediaService.WriteLog("接收到SwitchShareLoc ：ouid =" + qs["ouid"] + " token =" + qs["token"] + " appid =" + qs["appid"] + " uid =" + qs["uid"] + " tid =" + qs["tid"] + " sharelocation =" + qs["sharelocation"], MediaService.wirtelog);
+
+                int ouid = 0;
+                int uid = 0;
+                bool isVerToken = UniformVerification(qs["ouid"], qs["uid"], qs["appid"], qs["token"], ref ouid, ref uid, ref recv);
+                if (!isVerToken)
+                    return recv;
+
+                int sharelocation, tid;
+                int.TryParse(qs["tid"], out tid);
+                if (tid > 0 && int.TryParse(qs["sharelocation"], out sharelocation))
+                {
+                    string sql = string.Format("UPDATE wy_talkuser SET sharelocation={0} WHERE tid={1} AND [uid]={2}",
+                        sharelocation.ToString(), tid.ToString(), uid.ToString());
+                    if (SqlHelper.ExecuteNonQuery(sql) > 0)
+                    {
+                        return StandardFormat(MessageCode.Success);
+                    }
+                    return StandardFormat(MessageCode.DefaultError, "Target does not exist!");
+                }
+                return StandardFormat(MessageCode.FormatError);
+            }
+            catch (Exception e)
+            {
+                MediaService.WriteLog("执行异常：" + e.ToString(), MediaService.wirtelog);
+                return StandardFormat(MessageCode.DefaultError, e.Message);
+            }
+        }
+        #endregion
+
+        #endregion
+
+        #region 点赞
+        /// <summary>
+        /// 获取用户点赞信息
+        /// </summary>
+        /// <param name="qs">键值对</param>
+        /// <returns></returns>
+        public static string QueryDianZan(NameValueCollection qs)
+        {
+            /* NameValueCollection 值列表
+             * ouid,token,uid,appid,time,[up](true:<time 时间，false: >time 时间),[count](默认为 5)
+             */
+
+            string recv = StandardFormat(MessageCode.MissKey);
+            if (qs == null || qs["uid"] == null || qs["ouid"] == null || qs["token"] == null || qs["appid"] == null || qs["time"] == null)
+            {
+                MediaService.WriteLog("接收到获取用户点赞信息 ：" + recv, MediaService.wirtelog);
+                return recv;
+            }
+            try
+            {
+                MediaService.WriteLog("接收到获取用户点赞信息 ：ouid =" + qs["ouid"].ToString() + " uid =" + qs["uid"].ToString() + " token=" + qs["token"].ToString() + "appid =" + qs["appid"].ToString(), MediaService.wirtelog);
+
+                int ouid = 0;
+                int uid = 0;
+                bool isVerToken = UniformVerification(qs["ouid"].ToString(), qs["uid"].ToString(), qs["appid"].ToString(), qs["token"].ToString(), ref ouid, ref uid, ref recv);
+                if (!isVerToken)
+                    return recv;
+
+                long time = 0;
+                long.TryParse(qs["time"].ToString(), out time);
+                if (time == 0)
+                    time = DZAmountManger.Instance.GetTimeStamp();
+                int count = 5;
+                if (qs["count"] != null && int.TryParse(qs["count"].ToString(), out count))
+                {
+                    if (count == 0)
+                        count = 5;
+                }
+                bool up = true;
+                if (qs["up"] != null && bool.TryParse(qs["up"].ToString(), out up))
+                {
+                }
+
+                List<DianZanAmountInfo> infos = DZAmountManger.Instance.QueryAmountInfo(uid, count, time, up);
+
+                List<QueryDianZanAmountInfo> queryInfos = FillChannelName(infos);
+                StringBuilder sb = new StringBuilder();
+                foreach (var item in queryInfos)
+                {
+                    if (item != queryInfos.FirstOrDefault())
+                    {
+                        sb.Append(",");
+                    }
+                    sb.Append(item.ToString());
+                }
+                return StandardListFormat(MessageCode.Success, sb.ToString());
+            }
+            catch (Exception e)
+            {
+                return StandardFormat(MessageCode.MissKey, e.Message);
+            }
+        }
+
+        #region 填充频道名称
+        private static List<QueryDianZanAmountInfo> FillChannelName(List<DianZanAmountInfo> infos)
+        {
+            List<QueryDianZanAmountInfo> queryinfos = new List<QueryDianZanAmountInfo>();
+            if (infos == null || infos.Count == 0)
+                return queryinfos;
+            StringBuilder sb = new StringBuilder();
+            sb.Append("SELECT rid,channelname FROM wy_radio WHERE ");
+            foreach (var item in infos)
+            {
+                if (item != infos.FirstOrDefault())
+                    sb.Append(" or ");
+                sb.Append(" rid = " + item.channel);
+            }
+            DataTable dtContacts = SqlHelper.ExecuteTable(sb.ToString());
+            foreach (DataRow dr in dtContacts.Rows)
+            {
+                int id = Convert.ToInt32(dr["rid"].ToString());
+                infos.ForEach(x =>
+                    {
+                        if (x.channel == id)
+                        {
+                            queryinfos.Add(x.ToCast(dr["channelname"].ToString()));
+                        }
+                    });
+            }
+            return queryinfos;
+        }
+
+        public static QueryDianZanAmountInfo ToCast(this DianZanAmountInfo info, string channelname)
+        {
+            return new QueryDianZanAmountInfo(info.channel, info.uid, info.url.Trim(), info.time, info.count, info.tlen, channelname);
+        }
+        #endregion
+
+        #endregion
+
+        #region 公共方法
+
+        #region 统一SN位数
+        internal const string PREFIXSN = "9716";
+
+        //统一12位的sn号
+        internal static string GetUniform12(string sn)
+        {
+            //#warning 待正式环境改回
+            //            return sn;
+            sn = sn.Trim().Replace("'", "");
+            if (string.IsNullOrWhiteSpace(sn))
+                return sn;
+            if (sn.Length == 12)
+                return sn;
+            if (sn.Length == 8)
+                return PREFIXSN + sn;
+            return sn;
+        }
+        //统一8位的sn号
+        internal static string GetUniform8(string sn)
+        {
+            //#warning 待正式环境改回
+            //            return sn;
+            sn = sn.Trim();
+            if (string.IsNullOrWhiteSpace(sn))
+                return sn;
+            if (sn.Length == 8)
+                return sn;
+            if (sn.Length == 12)
+                return sn.Remove(0, 4);
+            return sn;
+        }
+        #endregion
+
+        #region MD5加密
+        internal static string StringToMD5Hash(string inputString)
+        {
+            MD5 md5Hash = MD5.Create();
+            byte[] data = md5Hash.ComputeHash(Encoding.UTF8.GetBytes(inputString));
+            StringBuilder sBuilder = new StringBuilder();
+            for (int i = 0; i < data.Length; i++)
+            {
+                sBuilder.Append(data[i].ToString("x2"));
+            }
+            return sBuilder.ToString();
+        }
+        #endregion
+
+        #region 取Json字符值
+        internal static string GetJsonValue(string str, string substr, string laststr, bool isString)
+        {
+            int k = str.IndexOf("\"" + substr + "\":" + (isString ? "\"" : ""));
+            if (k > 0)
+            {
+                int length = substr.Length + 3 + (isString ? 1 : 0);
+                int e = str.IndexOf(laststr, k + length);
+                return str.Substring(k + length, e - k - length);
+            }
+            return string.Empty;
+        }
+        #endregion
+
+        #region 统一格式输出--发送到App
+        /// <summary>
+        /// 统一列表输出
+        /// </summary>
+        /// <param name="code"></param>
+        /// <param name="data"></param>
+        /// <returns></returns>
+        internal static string StandardListFormat(MessageCode code, string data)
+        {
+            return StandardFormat((int)code, MessageCodeDiscription.GetMessageCodeDiscription(code), " [ " + data + " ] ");
+        }
+        /// <summary>
+        /// 统一列表输出
+        /// </summary>
+        /// <param name="code"></param>
+        /// <param name="data"></param>
+        /// <returns></returns>
+        internal static string StandardObjectFormat(MessageCode code, string data)
+        {
+            if (string.IsNullOrWhiteSpace(data))
+                return StandardFormat(code);
+            return StandardFormat((int)code, MessageCodeDiscription.GetMessageCodeDiscription(code), data);
+        }
+        /// <summary>
+        /// 错误输出，添加错误描述
+        /// </summary>
+        /// <param name="code"></param>
+        /// <param name="errormessage"></param>
+        /// <returns></returns>
+        internal static string StandardFormat(MessageCode code, string errormessage)
+        {
+            return StandardFormat((int)code, MessageCodeDiscription.GetMessageCodeDiscription(code) + " : " + errormessage);
+        }
+        /// <summary>
+        /// 统一格式输出
+        /// </summary>
+        /// <param name="code"></param>
+        /// <returns></returns>
+        internal static string StandardFormat(MessageCode code)
+        {
+            return StandardFormat((int)code, MessageCodeDiscription.GetMessageCodeDiscription(code));
+        }
+        /// <summary>
+        /// 统一格式输出,默认data：{}
+        /// </summary>
+        /// <param name="code"></param>
+        /// <param name="message"></param>
+        /// <param name="data"></param>
+        /// <returns></returns>
+        internal static string StandardFormat(int code, string message, string data = "{ }")
+        {
+            return "{\"code\":" + code + ",\"msg\":\"" + message + "\",\"data\":" + data + "}";
+        }
+
+
+        #endregion
+
+        #region 统一格式输出--发送到Goloz
+
+        internal const int APPID = 7;
+
+        //待定
+        #endregion
+
+        #region 错误输出格式
+
+        #region 写错误JSON
+        internal static string WriteErrorJson(int code, string message)
+        {
+            return "{\"status\":false,\"code\":" + code + ",\"message\":\"" + message + "\"}";
+        }
+        #endregion
+
+        #region 写错误JSON
+        internal static string WriteErrorJson(int code)
+        {
+            return "{\"status\":false,\"code\":" + code + ",\"message\":\"" + "message" + "\"}";
+        }
+        #endregion
+
+        #endregion
+
+        #region 时间戳
+        /// <summary>
+        /// DateTime时间格式转换为Unix时间戳格式
+        /// </summary>
+        /// <param name=”time”></param>
+        /// <returns></returns>
+        private static int ConvertDateTimeInt(System.DateTime time)
+        {
+            System.DateTime startTime = TimeZone.CurrentTimeZone.ToLocalTime(new System.DateTime(1970, 1, 1));
+            return (int)(time - startTime).TotalSeconds;
+        }
+        public static int ConvertDateTimeInt(string time)
+        {
+            DateTime dt;
+            if (DateTime.TryParse(time, out dt))
+            {
+                return ConvertDateTimeInt(dt);
+            }
+            return 0;
+        }
+        // 时间戳转为C#格式时间
+        public static DateTime StampToDateTime(string timeStamp)
+        {
+            DateTime dateTimeStart = TimeZone.CurrentTimeZone.ToLocalTime(new DateTime(1970, 1, 1));
+            long lTime = long.Parse(timeStamp + "0000000");
+            TimeSpan toNow = new TimeSpan(lTime);
+            return dateTimeStart.Add(toNow);
+        }
+        #endregion
+
+        #endregion
+
+        #region 更新系统频道
+        /// <summary>
+        /// 更新系统频道
+        /// </summary>
+        /// <param name="qs"></param>
+        /// <returns></returns>
+        public static string UpdateSysRadio(NameValueCollection qs)
+        {
+            /* NameValueCollection 值列表
+            * rid,option
+            */
+
+            string recv = StandardFormat(MessageCode.MissKey);
+            if (qs == null || qs["rid"] == null || qs["option"] == null)
+            {
+                MediaService.WriteLog("接收到更新系统频道 ：" + recv, MediaService.wirtelog);
+                return recv;
+            }
+            try
+            {
+                MediaService.WriteLog("接收到更新系统频道 ：rid =" + qs["rid"].ToString() + "option =" + qs["option"].ToString(), MediaService.wirtelog);
+
+                int option = int.Parse(qs["option"].ToString());
+                int rid = int.Parse(qs["rid"].ToString());
+                if (option == 0)//add、update
+                {
+                    DataTable radiodt = SqlHelper.ExecuteTable("select top(1) * from [wy_radio] where rid =" + rid);
+                    RadioObject ro = new RadioObject();
+                    ro.channelname = radiodt.Rows[0]["channelname"].ToString();
+                    ro.cityname = radiodt.Rows[0]["cityname"].ToString();
+                    ro.areaid = Int32.Parse(radiodt.Rows[0]["areaid"].ToString());
+                    ro.audiourl = radiodt.Rows[0]["audiourl"].ToString();
+                    ro.uploadurl = radiodt.Rows[0]["uploadurl"].ToString();
+                    ro.sendtype = Int32.Parse(radiodt.Rows[0]["sendtype"].ToString());
+                    ro.channelde = Int32.Parse(radiodt.Rows[0]["channelde"].ToString());
+                    ro.radiotype = Int32.Parse(radiodt.Rows[0]["radiotype"].ToString());
+                    ro.imageurl = radiodt.Rows[0]["imageurl"].ToString();
+                    ro.thumburl = radiodt.Rows[0]["thumburl"].ToString();
+                    if (ro.sendtype > 0)
+                    {
+                        string[] uidstr = radiodt.Rows[0]["sendtype"].ToString().Trim(',').Split(',');
+                        if (uidstr.Length > 0)
+                        {
+                            ro.senduid = new int[uidstr.Length];
+                            for (int j = 0; j < uidstr.Length; j++)
+                            {
+                                ro.senduid[j] = Int32.Parse(uidstr[j]);
+                            }
+                        }
+                    }
+                    ro.prid = Int32.Parse(radiodt.Rows[0]["prid"].ToString());
+                    ro.areacode = radiodt.Rows[0]["areacode"].ToString();
+                    ro.flashimageurl = radiodt.Rows[0]["flashimageurl"].ToString();
+                    MediaService.radioDic.AddOrUpdate(rid, ro, (k, v) => ro);
+                }
+                else if (option == 1)//delete
+                {
+                    RadioObject ro = new RadioObject();
+                    MediaService.radioDic.TryRemove(rid, out ro);
+                }
+                return StandardFormat(MessageCode.Success);
+            }
+            catch (Exception e)
+            {
+                MediaService.WriteLog("执行异常：" + e.ToString(), MediaService.wirtelog);
+                return StandardFormat(MessageCode.DefaultError, e.Message);
+            }
+        }
+        #endregion
+
+        #region 查询频道呼叫信息
+        /// <summary>
+        /// 更新系统频道
+        /// </summary>
+        /// <param name="qs"></param>
+        /// <returns></returns>
+        public static string QueryCallTalkInfo(NameValueCollection qs)
+        {
+            /* NameValueCollection 值列表
+             * starttime,endtime,talkname
+             */
+            string recv = StandardFormat(MessageCode.MissKey);
+            if (qs == null || qs["starttime"] == null || qs["endtime"] == null)
+            {
+                MediaService.WriteLog("查询频道呼叫信息:" + recv, MediaService.wirtelog);
+                return recv;
+            }
+            try
+            {
+                MediaService.WriteLog("查询频道呼叫信息 starttime:" + qs["starttime"].ToString() + "endtime:" + qs["endtime"].ToString(), MediaService.wirtelog);
+                string starttime = qs["starttime"] == null ? "" : qs["starttime"].ToString();
+                string endtime = qs["endtime"] == null ? "" : qs["endtime"].ToString();
+                string talkname = qs["talkname"] == null ? "" : qs["talkname"].ToString();
+                string talkresult = "[]";
+                string responsetalkresult = "[]";
+                if (!string.IsNullOrWhiteSpace(starttime) && !string.IsNullOrWhiteSpace(endtime))
+                {
+                    DateTime stime = StampToDateTime(starttime);
+                    DateTime etime = StampToDateTime(endtime);
+                    DateTime temp = DateTime.Now;
+                    if (stime > etime)
+                    {
+                        temp = etime;
+                        etime = stime;
+                        stime = temp;
+                    }
+                    var talks = CallTalkMongoDBOption.QueryCallTalk(stime, etime, talkname);
+                    talkresult = JsonHelper.JavaScriptSerialize<List<CallTalkInfo>>(talks);
+                    var talk = talks.FirstOrDefault();
+                    if (talk != null)
+                    {
+                        string guid = talk.TGuid;
+                        responsetalkresult = JsonHelper.JavaScriptSerialize<List<ResponseCallTalk>>(CallTalkMongoDBOption.QueryResponseCallTalk(stime, etime, guid));
+                    }
+                }
+                string subrecv = "{\"talkinfo\":" + talkresult + ",\"responsetalkinfo\":" + responsetalkresult + "}";
+                return StandardObjectFormat(MessageCode.Success, subrecv);
+            }
+            catch (Exception e)
+            {
+                MediaService.WriteLog("执行异常：" + e.ToString(), MediaService.wirtelog);
+                return HttpZGoloBusiness.StandardFormat(MessageCode.DefaultError, e.Message);
+            }
+        }
+        #endregion
+
+        #region 发送在线用户信息
+
+        #endregion
+
+        #region 更新了用户设备
+        /// <summary>
+        /// 更新了用户设备
+        /// </summary>
+        /// <param name="qs"></param>
+        /// <returns></returns>
+        internal static string UpdateUserDevice(NameValueCollection qs)
+        {
+            /* NameValueCollection 值列表
+            * glsns
+            */
+
+            string recv = StandardFormat(MessageCode.MissKey);
+            if (qs == null || qs["glsns"] == null)
+            {
+                MediaService.WriteLog("接收到更新用户设备 ：" + recv, MediaService.wirtelog);
+                return recv;
+            }
+            try
+            {
+                MediaService.WriteLog("接收到更新用户设备 ：glsns =" + qs["glsns"], MediaService.wirtelog);
+                string glsns = string.Join(",",
+                    qs["glsns"].Split(new[] { ',', '|', '.', '、', '-' }, StringSplitOptions.RemoveEmptyEntries));
+                DataTable dt = SqlHelper.ExecuteTable("SELECT uid FROM [app_users] WHERE glsn IN (" + glsns + ")");
+                foreach (DataRow row in dt.Rows)
+                {
+                    int uid = int.Parse(row["uid"].ToString());
+                    UserObject uo;
+                    if (MediaService.userDic.TryGetValue(uid, out uo))
+                    {
+                        if (uo.socket != null && uo.socket[APPID] != null)
+                        {
+                            try
+                            {
+                                uo.socket[APPID].Shutdown(SocketShutdown.Both);
+                            }
+                            catch { }
+                            uo.socket[APPID].Close();
+                            uo.socket[APPID] = null;
+                        }
+                    }
+                }
+                return StandardFormat(MessageCode.Success);
+            }
+            catch (Exception e)
+            {
+                MediaService.WriteLog("执行异常：" + e.ToString(), MediaService.wirtelog);
+                return StandardFormat(MessageCode.DefaultError, e.Message);
+            }
+        }
+        #endregion
+
+        #region adapter
+        #region 用户登录适配信息
+        /// <summary>
+        /// 获取用户登录适配信息
+        /// </summary>
+        /// <param name="qs">键值对</param>
+        /// <returns></returns>
+        public static string UserLogin(NameValueCollection qs)
+        {
+            /* NameValueCollection 值列表
+             * loginkey,password,appid
+             */
+
+            #region uid
+            string recv = StandardFormat(MessageCode.MissKey);
+            if (qs == null || qs["loginkey"] == null || qs["password"] == null || qs["appid"] == null)
+            {
+                MediaService.WriteLog("接收到获取用户登录适配信息 ：" + recv, MediaService.wirtelog);
+                return recv;
+            }
+            try
+            {
+                MediaService.WriteLog("接收到获取用户登录适配信息 ：loginkey =" + qs["loginkey"] + " password=" + qs["password"] + "appid =" + qs["appid"], MediaService.wirtelog);
+                dbscarreturnUser user = MyCarAdapter.AppLogin(qs["loginkey"], qs["password"], qs["appid"], ref recv);
+                if (user != null && user.code == 0 && user.data != null && user.data.user != null)
+                {
+                    int count = Convert.ToInt32(SqlHelper.ExecuteScalar("select count(*) from wy_user where user_id='" + user.data.user.user_id + "';"));
+                    if (count > 0)
+                    {
+                        SqlHelper.ExecuteNonQuery("update [wy_user] set user_name='" +
+                                                  user.data.user.user_name + "',nation_id='" + user.data.user.nation_id +
+                                                  "',nick_name='" + user.data.user.nick_name + "',email='" +
+                                                  user.data.user.email + "',mobile='" + user.data.user.mobile +
+                                                  "',face_url='" + user.data.user.face_url + "',country='" +
+                                                  user.data.user.country + "' where user_id='" +
+                                                  user.data.user.user_id + "'");
+                    }
+                    else
+                    {
+                        string insert = "insert [wy_user] (user_id,user_name,nick_name,mobile,email,face_url,country,province,city,nation_id) values ('" +
+                              user.data.user.user_id + "','" + user.data.user.user_name + "','" + user.data.user.nick_name +
+                              "','" + user.data.user.mobile + "','" + user.data.user.email + "','" + user.data.user.face_url + "','" +
+                              user.data.user.country + "','" + user.data.user.province + "','" + user.data.user.city + "','" + user.data.user.nation_id + "');";
+
+                        int result = SqlHelper.ExecuteNonQuery(insert);
+                    }
+                }
+                return recv;
+            }
+            catch (Exception e)
+            {
+                return StandardFormat(MessageCode.MissKey, e.Message);
+            }
+            #endregion
+        }
+        #endregion
+
+        #region 请求发送验证码(注册和找回密码用)
+        /// <summary>
+        /// 请求发送验证码(注册和找回密码用)
+        /// </summary>
+        /// <param name="qs">键值对</param>
+        /// <returns></returns>
+        public static string ReqSendCode(NameValueCollection qs)
+        {
+            /* NameValueCollection 值列表
+             * req_info,is_check
+             */
+
+            #region uid
+            string recv = StandardFormat(MessageCode.MissKey);
+            if (qs == null || qs["req_info"] == null || qs["is_check"] == null)
+            {
+                MediaService.WriteLog("接收到请求发送验证码(注册和找回密码用) ：" + recv, MediaService.wirtelog);
+                return recv;
+            }
+            try
+            {
+                MediaService.WriteLog("接收到请求发送验证码(注册和找回密码用) ：req_info =" + qs["req_info"] + " is_check=" + qs["is_check"], MediaService.wirtelog);
+                const string isRes = "3"; //短信验证码
+                MyCarAdapter.VerifyCode_Req_Send_Code(qs["req_info"], qs["is_check"], isRes, ref recv);
+                return recv;
+            }
+            catch (Exception e)
+            {
+                return StandardFormat(MessageCode.MissKey, e.Message);
+            }
+            #endregion
+        }
+        #endregion
+
+        #region 验证输入的验证码
+        /// <summary>
+        /// 验证输入的验证码
+        /// </summary>
+        /// <param name="qs">键值对</param>
+        /// <returns></returns>
+        public static string VerifyCode(NameValueCollection qs)
+        {
+            /* NameValueCollection 值列表
+             * req_info,verify_code
+             */
+
+            #region uid
+            string recv = StandardFormat(MessageCode.MissKey);
+            if (qs == null || qs["req_info"] == null || qs["verify_code"] == null)
+            {
+                MediaService.WriteLog("接收到验证输入的验证码 ：" + recv, MediaService.wirtelog);
+                return recv;
+            }
+            try
+            {
+                MediaService.WriteLog("接收到验证输入的验证码 ：req_info =" + qs["req_info"].ToString() + " verify_code=" + qs["verify_code"].ToString(), MediaService.wirtelog);
+                MyCarAdapter.Verifycode_Verify(qs["req_info"].ToString(), qs["verify_code"].ToString(), ref recv);
+                return recv;
+            }
+            catch (Exception e)
+            {
+                return StandardFormat(MessageCode.MissKey, e.Message);
+            }
+            #endregion
+        }
+        #endregion
+
+        #region 找回密码
+        /// <summary>
+        /// 找回密码
+        /// </summary>
+        /// <param name="qs">键值对</param>
+        /// <returns></returns>
+        public static string ResetPass(NameValueCollection qs)
+        {
+            /* NameValueCollection 值列表
+             * req,pass,confirm_pass,verify_code,appid
+             */
+
+            #region uid
+            string recv = StandardFormat(MessageCode.MissKey);
+            if (qs == null || qs["req"] == null || qs["pass"] == null || qs["confirm_pass"] == null || qs["verify_code"] == null || qs["appid"] == null)
+            {
+                MediaService.WriteLog("接收到找回密码 ：" + recv, MediaService.wirtelog);
+                return recv;
+            }
+            try
+            {
+                string appid = qs["appid"];
+                MediaService.WriteLog("接收到找回密码 ：req =" + qs["req"] + " pass=" + qs["pass"] + " confirm_pass=" + qs["confirm_pass"] + " verify_code=" + qs["verify_code"] + " appid=" + appid, MediaService.wirtelog);
+                MyCarAdapter.Passport_Service_Reset_Pass(appid, qs["req"], qs["pass"], qs["confirm_pass"], qs["verify_code"], ref recv);
+                return recv;
+            }
+            catch (Exception e)
+            {
+                return StandardFormat(MessageCode.DefaultError, e.Message);
+            }
+            #endregion
+        }
+        #endregion
+
+        #region 设置登录密码
+        /// <summary>
+        /// 设置登录密码
+        /// </summary>
+        /// <param name="qs">键值对</param>
+        /// <returns></returns>
+        public static string SetPass(NameValueCollection qs)
+        {
+            /* NameValueCollection 值列表
+             * ouid,pass,newpass,appid,token,ver
+             */
+
+            #region SetPass
+            string recv = StandardFormat(MessageCode.MissKey);
+            if (qs == null || qs["ouid"] == null || qs["pass"] == null || qs["newpass"] == null || qs["appid"] == null || qs["token"] == null || qs["ver"] == null)
+            {
+                MediaService.WriteLog("接收到设置登录密码 ：" + recv, MediaService.wirtelog);
+                return recv;
+            }
+            try
+            {
+                string appId = qs["appid"];
+                string ver = qs["ver"];
+                MediaService.WriteLog("接收到设置登录密码 ：ouid =" + qs["ouid"] + " pass=" + qs["pass"] + " newpass=" + qs["newpass"] + " app_id=" + appId + " token=" + qs["token"] + " ver=" + ver, MediaService.wirtelog);
+                MyCarAdapter.Userinfo_Set_Password(qs["ouid"], appId, qs["token"], qs["pass"], qs["newpass"], ver, ref recv);
+                return recv;
+            }
+            catch (Exception e)
+            {
+                return StandardFormat(MessageCode.DefaultError, e.StackTrace);
+            }
+            #endregion
+        }
+        #endregion
+
+        #region 注册
+        /// <summary>
+        /// 注册
+        /// </summary>
+        /// <param name="qs">键值对</param>
+        /// <returns></returns>
+        public static string Register(NameValueCollection qs)
+        {
+            /* NameValueCollection 值列表
+             * verify_code,pass,appid,loginKey,[nick_name]
+             */
+
+            string recv = StandardFormat(MessageCode.MissKey);
+            if (qs == null || qs["verify_code"] == null || qs["pass"] == null || qs["appid"] == null || qs["loginKey"] == null)
+            {
+                MediaService.WriteLog("接收到Register ：" + recv, MediaService.wirtelog);
+                return recv;
+            }
+            try
+            {
+                string appId = qs["appid"];
+                string loginKey = qs["loginKey"];
+                MediaService.WriteLog("接收到Register ：verify_code =" + qs["verify_code"] + " pass=" + qs["pass"] + " app_id=" + appId + " nick_name=" + qs["nick_name"], MediaService.wirtelog);
+                const string nationId = "143";//固定为中国
+                MyCarAdapter.Passport_Service_Register(appId, qs["verify_code"], qs["nick_name"] + "", qs["pass"], nationId, loginKey, ref recv);
+                return recv;
+            }
+            catch (Exception e)
+            {
+                return StandardFormat(MessageCode.DefaultError, e.StackTrace);
+            }
+        }
+        #endregion
+
+        #region 修改昵称
+        /// <summary>
+        /// 修改昵称
+        /// </summary>
+        /// <param name="qs"></param>
+        /// <returns></returns>
+        public static string UpdateNickname(NameValueCollection qs)
+        {
+            /* NameValueCollection 值列表
+             * ouid,token,appid,nickname
+             */
+
+            if (qs != null && qs["ouid"] != null && qs["appid"] != null && qs["token"] != null && qs["nickname"] != null)
+            {
+                try
+                {
+                    string token = qs["token"];
+                    string nickname = qs["nickname"];
+                    MediaService.WriteLog("UpdateNickname----ouid=" + qs["ouid"] + " appid=" + qs["appid"] + " token=" + token + " nickname=" + nickname, MediaService.wirtelog);
+
+                    int appid, ouid;
+                    int.TryParse(qs["appid"], out appid);
+                    int.TryParse(qs["ouid"], out ouid);
+
+                    if (appid > 0 && ouid > 0 && token.Length > 0 && nickname.Length > 0)
+                    {
+                        string errMessage = "";
+                        if (IsContainToken(ouid, appid, token, ref errMessage))
+                        {
+                            Dictionary<string, string> get = new Dictionary<string, string>();
+                            get.Add("action", "userinfo.set_base");
+                            get.Add("user_id", ouid.ToString());
+                            get.Add("ver", "5.0.3");
+                            get.Add("app_id", appid.ToString());
+                            Dictionary<string, string> post = new Dictionary<string, string>();
+                            post.Add("name", nickname);
+                            string sign = Utility.GetSign(token, get, post);
+                            get.Add("sign", sign);
+                            string geturl = Utility.CreateLinkString(get);
+                            string posturl = Utility.CreateLinkString(post);
+                            string str = Utility.HttpRequestRoute("http://base.api.dbscar.com/?" + geturl, posturl, "POST", Encoding.UTF8);
+
+                            MediaService.WriteLog("str=" + str, MediaService.wirtelog);
+                            if (CommBusiness.GetJsonValue(str, "code", ",", false) == "0")
+                            {
+                                string sql = "UPDATE wy_user SET nick_name='" + nickname + "' WHERE [user_id]=" + ouid;
+                                SqlHelper.ExecuteNonQuery(sql);
+                            }
+                            return str;
+                        }
+                        return StandardFormat(MessageCode.TokenOverdue, errMessage);
+                    }
+                    else
+                    {
+                        return StandardFormat(MessageCode.FormatError);
+                    }
+                }
+                catch (Exception err)
+                {
+                    MediaService.WriteLog("执行异常：" + err, MediaService.wirtelog);
+                    return StandardFormat(MessageCode.DefaultError, err.Message);
+                }
+            }
+            else
+            {
+                return StandardFormat(MessageCode.MissKey);
+            }
+        }
+        #endregion
+
+        #region 收货地址
+        #region 添加地址
+        /// <summary>
+        /// 添加地址
+        /// </summary>
+        /// <param name="qs"></param>
+        /// <returns></returns>
+        public static string AddAddress(NameValueCollection qs)
+        {
+            /* NameValueCollection 值列表
+             * ouid, appid, token, user_name, house_number, address, mobile, region_2, region_3, region_4
+             */
+
+            string recv = StandardFormat(MessageCode.MissKey);
+            if (qs == null || qs["ouid"] == null || qs["appid"] == null || qs["user_name"] == null || qs["house_number"] == null || qs["address"] == null || qs["mobile"] == null || qs["region_2"] == null || qs["region_3"] == null || qs["region_4"] == null || qs["token"] == null)
+            {
+                MediaService.WriteLog("接收到AddAddress ：" + recv, MediaService.wirtelog);
+                return recv;
+            }
+            try
+            {
+                string appId = qs["appid"];
+                string user_name = qs["user_name"], house_number = qs["house_number"], address = qs["address"], mobile = qs["mobile"];
+                string region_2 = qs["region_2"], region_3 = qs["region_3"], region_4 = qs["region_4"];
+                MediaService.WriteLog("接收到AddAddress ：ouid =" + qs["ouid"] + " app_id=" + appId + " token=" + qs["token"] + " user_name=" + user_name + " house_number=" + qs["house_number"] + " mobile=" + mobile + " region_2=" + qs["region_2"] + " region_3=" + region_3 + " region_4=" + qs["region_4"] + " address=" + address, MediaService.wirtelog);
+                MyCarAdapter.AddAddress(qs["ouid"], appId, qs["token"], user_name, house_number, region_2, region_3, region_4, address, mobile, ref recv);
+                return recv;
+            }
+            catch (Exception e)
+            {
+                return StandardFormat(MessageCode.DefaultError, e.StackTrace);
+            }
+        }
+        #endregion
+
+        #region 修改地址
+        /// <summary>
+        /// 修改地址
+        /// </summary>
+        /// <param name="qs"></param>
+        /// <returns></returns>
+        public static string UpdateAddress(NameValueCollection qs)
+        {
+            /* NameValueCollection 值列表
+             * ouid, appid, token, id, [user_name, address, mobile, region_2, region_3, region_4]
+             */
+
+            string recv = StandardFormat(MessageCode.MissKey);
+            if (qs == null || qs["ouid"] == null || qs["appid"] == null || qs["token"] == null || qs["id"] == null)
+            {
+                MediaService.WriteLog("接收到UpdateAddress ：" + recv, MediaService.wirtelog);
+                return recv;
+            }
+            try
+            {
+                string appId = qs["appid"];
+                string id = qs["id"];
+                string user_name = qs["user_name"], address = qs["address"], mobile = qs["mobile"];
+                string region_2 = qs["region_2"], region_3 = qs["region_3"], region_4 = qs["region_4"];
+                MediaService.WriteLog("接收到UpdateAddress ：ouid =" + qs["ouid"] + " app_id=" + appId + " token=" + qs["token"] + " user_name=" + user_name + " mobile=" + mobile + " region_2=" + qs["region_2"] + " region_3=" + region_3 + " region_4=" + qs["region_4"] + " address=" + address, MediaService.wirtelog);
+                MyCarAdapter.UpdateAddress(qs["ouid"], appId, qs["token"], id, false, user_name, mobile, "143", region_2, region_3, region_4, "0", address, ref recv);
+                return recv;
+            }
+            catch (Exception e)
+            {
+                return StandardFormat(MessageCode.DefaultError, e.StackTrace);
+            }
+        }
+        #endregion
+
+        #region 获取地址列表
+        /// <summary>
+        /// 获取地址列表
+        /// </summary>
+        /// <param name="qs"></param>
+        /// <returns></returns>
+        public static string GetAddressList(NameValueCollection qs)
+        {
+            /* NameValueCollection 值列表
+             * ouid,appid,token
+             */
+
+            string recv = StandardFormat(MessageCode.MissKey);
+            if (qs == null || qs["ouid"] == null || qs["appid"] == null || qs["token"] == null)
+            {
+                MediaService.WriteLog("接收到GetAddressList ：" + recv, MediaService.wirtelog);
+                return recv;
+            }
+            try
+            {
+                string appId = qs["appid"];
+                MediaService.WriteLog("接收到GetAddressList ：ouid =" + qs["ouid"] + " app_id=" + appId + " token=" + qs["token"], MediaService.wirtelog);
+                MyCarAdapter.GetAddress(qs["ouid"], appId, qs["token"], ref recv);
+                return recv;
+            }
+            catch (Exception e)
+            {
+                return StandardFormat(MessageCode.DefaultError, e.StackTrace);
+            }
+        }
+        #endregion
+
+        #region 设置默认地址
+        /// <summary>
+        /// 设置默认地址
+        /// </summary>
+        /// <param name="qs"></param>
+        /// <returns></returns>
+        public static string SetDefaultAddress(NameValueCollection qs)
+        {
+            /* NameValueCollection 值列表
+             * ouid,appid,token,id,isdefault(1/0)
+             */
+
+            string recv = StandardFormat(MessageCode.MissKey);
+            if (qs == null || qs["ouid"] == null || qs["appid"] == null || qs["token"] == null || qs["id"] == null || qs["isdefault"] == null)
+            {
+                MediaService.WriteLog("接收到GetAddressList ：" + recv, MediaService.wirtelog);
+                return recv;
+            }
+            try
+            {
+                string appId = qs["appid"];
+                string id = qs["id"];
+                MediaService.WriteLog("接收到GetAddressList ：ouid =" + qs["ouid"] + " app_id=" + appId + " token=" + qs["token"] + " id=" + id + " isdefault=" + qs["isdefault"], MediaService.wirtelog);
+                MyCarAdapter.UpdateAddress(qs["ouid"], appId, qs["token"], id, qs["isdefault"], ref recv);
+                return recv;
+            }
+            catch (Exception e)
+            {
+                return StandardFormat(MessageCode.DefaultError, e.StackTrace);
+            }
+        }
+        #endregion
+
+        #region 删除地址
+        /// <summary>
+        /// 删除地址
+        /// </summary>
+        /// <param name="qs"></param>
+        /// <returns></returns>
+        public static string DeleteAddress(NameValueCollection qs)
+        {
+            /* NameValueCollection 值列表
+             * ouid,appid,token,id
+             */
+
+            string recv = StandardFormat(MessageCode.MissKey);
+            if (qs == null || qs["ouid"] == null || qs["appid"] == null || qs["token"] == null || qs["id"] == null)
+            {
+                MediaService.WriteLog("接收到DeleteAddress ：" + recv, MediaService.wirtelog);
+                return recv;
+            }
+            try
+            {
+                string appId = qs["appid"];
+                string id = qs["id"];
+                MediaService.WriteLog("接收到DeleteAddress ：ouid =" + qs["ouid"] + " app_id=" + appId + " token=" + qs["token"] + " id=" + id, MediaService.wirtelog);
+                MyCarAdapter.DeleteAddress(qs["ouid"], appId, qs["token"], id, ref recv);
+                return recv;
+            }
+            catch (Exception e)
+            {
+                return StandardFormat(MessageCode.DefaultError, e.StackTrace);
+            }
+        }
+        #endregion
+
+        #region 获取全部省市区
+        /// <summary>
+        /// 获取全部省市区
+        /// </summary>
+        /// <param name="qs"></param>
+        /// <returns></returns>
+        public static string GetAllArea()
+        {
+            try
+            {
+                MediaService.WriteLog("接收到 获取全部省市区 ", MediaService.wirtelog);
+                string sql = "SELECT areaid, namecn, districtcn, provcn, parentid FROM app_areaid";
+                DataTable dt = SqlHelper.ExecuteTable(sql);
+                StringBuilder sb = new StringBuilder(1024);
+                foreach (DataRow row in dt.Rows)
+                {
+                    sb.AppendFormat("{{\"areaid\":{0},\"namecn\":\"{1}\",\"districtcn\":\"{2}\",\"provcn\":\"{3}\",\"parentid\":{4}}},",
+                        row["areaid"], row["namecn"], row["districtcn"], row["provcn"], row["parentid"]);
+                }
+                return StandardListFormat(MessageCode.Success, sb.ToString().TrimEnd(','));
+            }
+            catch (Exception e)
+            {
+                MediaService.WriteLog("获取全部省市区 出错：" + e.Message, MediaService.wirtelog);
+                return StandardFormat(MessageCode.DefaultError, e.StackTrace);
+            }
+        }
+        #endregion
+
+        #region 获取省份列表
+        /// <summary>
+        /// 获取省份列表
+        /// </summary>
+        /// <param name="qs"></param>
+        /// <returns></returns>
+        public static string GetProvince(NameValueCollection qs)
+        {
+            /* NameValueCollection 值列表
+             * ouid,appid,token,ver
+             */
+
+            string recv = StandardFormat(MessageCode.MissKey);
+            if (qs == null || qs["ouid"] == null || qs["appid"] == null || qs["token"] == null || qs["ver"] == null)
+            {
+                MediaService.WriteLog("接收到GetProvince ：" + recv, MediaService.wirtelog);
+                return recv;
+            }
+            try
+            {
+                string appId = qs["appid"];
+                const string ncode = "143";
+                MediaService.WriteLog("接收到GetProvince ：ouid =" + qs["ouid"] + " app_id=" + appId + " token=" + qs["token"] + " ver=" + qs["ver"] + " ncode=" + ncode, MediaService.wirtelog);
+                MyCarAdapter.GetProvince(qs["ouid"], appId, qs["token"], ncode, qs["ver"], ref recv);
+                return recv;
+            }
+            catch (Exception e)
+            {
+                return StandardFormat(MessageCode.DefaultError, e.StackTrace);
+            }
+        }
+        #endregion
+
+        #region 获取城市列表
+        /// <summary>
+        /// 获取城市列表
+        /// </summary>
+        /// <param name="qs"></param>
+        /// <returns></returns>
+        public static string GetCity(NameValueCollection qs)
+        {
+            /* NameValueCollection 值列表
+             * ouid,appid,token,ver,pcode
+             */
+
+            string recv = StandardFormat(MessageCode.MissKey);
+            if (qs == null || qs["ouid"] == null || qs["appid"] == null || qs["token"] == null || qs["ver"] == null || qs["pcode"] == null)
+            {
+                MediaService.WriteLog("接收到GetCity ：" + recv, MediaService.wirtelog);
+                return recv;
+            }
+            try
+            {
+                string appId = qs["appid"];
+                string pcode = qs["pcode"];
+                MediaService.WriteLog("接收到GetCity ：ouid =" + qs["ouid"] + " app_id=" + appId + " token=" + qs["token"] + " ver=" + qs["ver"] + " pcode=" + pcode, MediaService.wirtelog);
+                MyCarAdapter.GetCity(qs["ouid"], appId, qs["token"], pcode, qs["ver"], ref recv);
+                return recv;
+            }
+            catch (Exception e)
+            {
+                return StandardFormat(MessageCode.DefaultError, e.StackTrace);
+            }
+        }
+        #endregion
+
+        #region 获取区县列表
+        /// <summary>
+        /// 获取区县列表
+        /// </summary>
+        /// <param name="qs"></param>
+        /// <returns></returns>
+        public static string GetRegion(NameValueCollection qs)
+        {
+            /* NameValueCollection 值列表
+             * ouid,appid,token,ver,ccode
+             */
+
+            string recv = StandardFormat(MessageCode.MissKey);
+            if (qs == null || qs["ouid"] == null || qs["appid"] == null || qs["token"] == null || qs["ver"] == null || qs["ccode"] == null)
+            {
+                MediaService.WriteLog("接收到GetRegion ：" + recv, MediaService.wirtelog);
+                return recv;
+            }
+            try
+            {
+                string appId = qs["appid"];
+                string ccode = qs["ccode"];
+                MediaService.WriteLog("接收到GetRegion ：ouid =" + qs["ouid"] + " app_id=" + appId + " token=" + qs["token"] + " ver=" + qs["ver"] + " ccode=" + ccode, MediaService.wirtelog);
+                MyCarAdapter.GetRegion(qs["ouid"], appId, qs["token"], ccode, qs["ver"], ref recv);
+                return recv;
+            }
+            catch (Exception e)
+            {
+                return StandardFormat(MessageCode.DefaultError, e.StackTrace);
+            }
+        }
+        #endregion
+        #endregion
+
+        #region 查询用户的经纬度
+        /// <summary>
+        /// 查询用户的经纬度
+        /// </summary>
+        /// <param name="qs">键值对</param>
+        /// <returns></returns>
+        public static string GetUserLoLa(NameValueCollection qs)
+        {
+            /* NameValueCollection 值列表
+             * ouid,uid,appid,token
+             */
+
+            string recv = StandardFormat(MessageCode.MissKey);
+            if (qs == null || qs["ouid"] == null || qs["uid"] == null || qs["appid"] == null || qs["token"] == null)
+            {
+                MediaService.WriteLog("接收到查询用户的经纬度：查询关键字缺失！" + recv, MediaService.wirtelog);
+                return recv;
+            }
+            try
+            {
+                int ouid = 0;
+                int uid = 0;
+                bool isVerToken = UniformVerification(qs["ouid"].ToString(), qs["uid"].ToString(), qs["appid"].ToString(), qs["token"].ToString(), ref ouid, ref uid, ref recv);
+
+                MediaService.WriteLog("接收到查询所有用户的经纬度 ：ouid =" + qs["ouid"] + "token =" + qs["token"] + "appid =" + qs["appid"] + "uid =" + qs["uid"], MediaService.wirtelog);
+                int appid = 0;
+                int.TryParse(qs["appid"].ToString(), out appid);
+                if (isVerToken)
+                {
+                    string subrecv = "";
+                    KeyValuePair<int, UserObject> user = MediaService.userDic.FirstOrDefault(x => x.Key == uid);
+                    if (user.Value != null)
+                    {
+                        subrecv = "{\"uid\":" + user.Key + ",\"lo\": " + user.Value.lo[appid] + ",\"la\":" + user.Value.la[appid] + "}";
+                    }
+                    recv = StandardObjectFormat(MessageCode.Success, subrecv);
+                    return recv;
+                }
+                else
+                    return StandardFormat(MessageCode.TokenOverdue);
+            }
+            catch (Exception err)
+            {
+                MediaService.WriteLog("执行异常：" + err.ToString(), MediaService.wirtelog);
+                return StandardFormat(MessageCode.DefaultError);
+            }
+        }
+        #endregion
+
+        #region 剩余流量查询
+        /// <summary>
+        /// 剩余流量查询
+        /// </summary>
+        /// <param name="qs"></param>
+        /// <returns></returns>
+        public static string GetFlowBySerial(NameValueCollection qs)
+        {
+            /* NameValueCollection 值列表
+             * glsn,sim
+             */
+
+            string recv = StandardFormat(MessageCode.MissKey);
+            if (qs == null || qs["glsn"] == null || qs["sim"] == null)
+            {
+                MediaService.WriteLog("接收到GetRegion ：" + recv, MediaService.wirtelog);
+                return recv;
+            }
+            try
+            {
+                string sim = qs["sim"];
+                string glsn = GetUniform12(qs["glsn"]);
+                MediaService.WriteLog("接收到GetRegion ：glsn =" + glsn + " sim=" + sim, MediaService.wirtelog);
+                MyCarAdapter.GetFlowBySerial(sim, glsn, ref recv);
+                return recv;
+            }
+            catch (Exception e)
+            {
+                return StandardFormat(MessageCode.DefaultError, e.StackTrace);
+            }
+        }
+        #endregion
+
+        #region 行程体检
+        #region 车辆体检报告列表
+        /// <summary>
+        /// 车辆体检报告列表
+        /// </summary>
+        /// <param name="qs"></param>
+        /// <returns></returns>
+        public static string CarReportList(NameValueCollection qs)
+        {
+            /* NameValueCollection 值列表
+             * ouid,appid,token,glsn,isstart,time
+             */
+
+            string recv = StandardFormat(MessageCode.MissKey);
+            if (qs == null || qs["ouid"] == null || qs["appid"] == null || qs["token"] == null || qs["isstart"] == null || qs["glsn"] == null)
+            {
+                MediaService.WriteLog("接收到CarReportList ：" + recv, MediaService.wirtelog);
+                return recv;
+            }
+            try
+            {
+                string appId = qs["appid"];
+                string glsn = GetUniform12(qs["glsn"]);
+                bool isstart = qs["isstart"] == "0";//刷新时为0
+                var isend = !isstart;
+                string time = qs["time"];
+                MediaService.WriteLog("接收到CarReportList ：ouid =" + qs["ouid"] + " app_id=" + appId + " token=" + qs["token"] + " glsn=" + glsn + " isstart=" + isstart + " time=" + time + " isend=" + isend, MediaService.wirtelog);
+                MyCarAdapter.Report_Service_Car_Report_List(qs["ouid"], appId, qs["token"], glsn, isstart, time, isend, time, ref recv);
+                return recv;
+            }
+            catch (Exception e)
+            {
+                return StandardFormat(MessageCode.DefaultError, e.StackTrace);
+            }
+        }
+        #endregion 
+
+        #region 足迹接口
+        /// <summary>
+        /// 足迹接口
+        /// </summary>
+        /// <param name="qs"></param>
+        /// <returns></returns>
+        public static string GetTripWgs(NameValueCollection qs)
+        {
+            /* NameValueCollection 值列表
+             * ouid,appid,token,glsn,start_time,end_time,type,isUseType
+             */
+
+            string recv = StandardFormat(MessageCode.MissKey);
+            if (qs == null || qs["ouid"] == null || qs["appid"] == null || qs["token"] == null || qs["start_time"] == null || qs["glsn"] == null || qs["type"] == null)
+            {
+                MediaService.WriteLog("接收到GetTripWgs ：" + recv, MediaService.wirtelog);
+                return recv;
+            }
+            try
+            {
+                string appId = qs["appid"];
+                string glsn = GetUniform12(qs["glsn"]);
+                string type = qs["type"];
+                string end_time = qs["end_time"];
+                string isUseType = qs["isUseType"];
+                MediaService.WriteLog("接收到GetTripWgs ：ouid =" + qs["ouid"] + " app_id=" + appId + " token=" + qs["token"] + " glsn=" + glsn + " start_time=" + qs["start_time"] + " end_time=" + end_time + " type=" + type + " isUseType=" + isUseType, MediaService.wirtelog);
+                MyCarAdapter.Trip_Service_Get_Trip_Wgs(qs["ouid"], appId, qs["token"], glsn, qs["start_time"], end_time, type, isUseType=="1", ref recv);
+                return recv;
+            }
+            catch (Exception e)
+            {
+                return StandardFormat(MessageCode.DefaultError, e.StackTrace);
+            }
+        }
+        #endregion 
+
+        #region 获取某个月的行程统计数据
+        /// <summary>
+        /// 获取某个月的行程统计数据
+        /// </summary>
+        /// <param name="qs"></param>
+        /// <returns></returns>
+        public static string MonthCount(NameValueCollection qs)
+        {
+            /* NameValueCollection 值列表
+             * ouid,appid,token,month,glsn
+             */
+
+            string recv = StandardFormat(MessageCode.MissKey);
+            if (qs == null || qs["ouid"] == null || qs["appid"] == null || qs["token"] == null || qs["month"] == null || qs["glsn"] == null)
+            {
+                MediaService.WriteLog("接收到MonthCount ：" + recv, MediaService.wirtelog);
+                return recv;
+            }
+            try
+            {
+                string appId = qs["appid"];
+                string glsn = GetUniform12(qs["glsn"]);
+                MediaService.WriteLog("接收到MonthCount ：ouid =" + qs["ouid"] + " app_id=" + appId + " token=" + qs["token"] + " month=" + qs["month"] + " glsn=" + glsn, MediaService.wirtelog);
+                MyCarAdapter.Mileage_Count_Month_Count(qs["ouid"], appId, qs["token"], glsn, qs["month"], ref recv);
+                return recv;
+            }
+            catch (Exception e)
+            {
+                return StandardFormat(MessageCode.DefaultError, e.StackTrace);
+            }
+        }
+        #endregion
+
+        #region 获取指定日期的行程数据
+        /// <summary>
+        /// 获取指定日期的行程数据
+        /// </summary>
+        /// <param name="qs"></param>
+        /// <returns></returns>
+        public static string GetMileage(NameValueCollection qs)
+        {
+            /* NameValueCollection 值列表
+             * ouid,appid,token,glsn,start_time,end_time
+             */
+
+            string recv = StandardFormat(MessageCode.MissKey);
+            if (qs == null || qs["ouid"] == null || qs["appid"] == null || qs["token"] == null || qs["start_time"] == null || qs["glsn"] == null || qs["end_time"] == null)
+            {
+                MediaService.WriteLog("接收到GetMileage ：" + recv, MediaService.wirtelog);
+                return recv;
+            }
+            try
+            {
+                string appId = qs["appid"];
+                string glsn = GetUniform12(qs["glsn"]);
+                string end_time = qs["end_time"];
+                MediaService.WriteLog("接收到GetMileage ：ouid =" + qs["ouid"] + " app_id=" + appId + " token=" + qs["token"] + " glsn=" + glsn + " start_time=" + qs["start_time"] + " end_time=" + end_time, MediaService.wirtelog);
+                MyCarAdapter.Gps_Info_Service_Get_Mileage(qs["ouid"], appId, qs["token"], glsn, qs["start_time"], end_time, ref recv);
+                return recv;
+            }
+            catch (Exception e)
+            {
+                return StandardFormat(MessageCode.DefaultError, e.StackTrace);
+            }
+        }
+        #endregion 
+
+        #region 根据指定行程id获取详细信息
+        /// <summary>
+        /// 根据指定行程id获取详细信息
+        /// </summary>
+        /// <param name="qs"></param>
+        /// <returns></returns>
+        public static string GetGpsInfo(NameValueCollection qs)
+        {
+            /* NameValueCollection 值列表
+             * ouid,appid,token,mileage_ids
+             */
+
+            string recv = StandardFormat(MessageCode.MissKey);
+            if (qs == null || qs["ouid"] == null || qs["appid"] == null || qs["token"] == null || qs["mileage_ids"] == null)
+            {
+                MediaService.WriteLog("接收到GetGpsInfo ：" + recv, MediaService.wirtelog);
+                return recv;
+            }
+            try
+            {
+                string appId = qs["appid"];
+                MediaService.WriteLog("接收到GetGpsInfo ：ouid =" + qs["ouid"] + " app_id=" + appId + " token=" + qs["token"] + " mileage_ids=" + qs["mileage_ids"], MediaService.wirtelog);
+                MyCarAdapter.Gps_Info_Get_Data2(qs["ouid"], appId, qs["token"], qs["mileage_ids"], ref recv);
+                return recv;
+            }
+            catch (Exception e)
+            {
+                return StandardFormat(MessageCode.DefaultError, e.StackTrace);
+            }
+        }
+        #endregion
+
+        #region 查询历史轨迹点（行程详情）
+        /// <summary>
+        /// 查询历史轨迹点（行程详情）
+        /// </summary>
+        /// <param name="qs"></param>
+        /// <returns></returns>
+        public static string GetGpsHisitory(NameValueCollection qs)
+        {
+            /* NameValueCollection 值列表
+             * ouid,appid,token,glsn,start_time,end_time,querydate
+             */
+
+            string recv = StandardFormat(MessageCode.MissKey);
+            if (qs == null || qs["ouid"] == null || qs["appid"] == null || qs["token"] == null || qs["start_time"] == null || qs["glsn"] == null || qs["end_time"] == null || qs["querydate"] == null)
+            {
+                MediaService.WriteLog("接收到GetGpsHisitory ：" + recv, MediaService.wirtelog);
+                return recv;
+            }
+            try
+            {
+                string appId = qs["appid"];
+                string glsn = GetUniform12(qs["glsn"]);
+                string end_time = qs["end_time"];
+                string querydate = qs["querydate"];
+                MediaService.WriteLog("接收到GetGpsHisitory ：ouid =" + qs["ouid"] + " app_id=" + appId + " token=" + qs["token"] + " glsn=" + glsn + " start_time=" + qs["start_time"] + " end_time=" + end_time + " querydate=" + querydate, MediaService.wirtelog);
+                MyCarAdapter.Gps_Info_Get_Hisitory_Position_Record_Wgs(qs["ouid"], appId, qs["token"], querydate, qs["start_time"], end_time, glsn, ref recv);
+                return recv;
+            }
+            catch (Exception e)
+            {
+                return StandardFormat(MessageCode.DefaultError, e.StackTrace);
+            }
+        }
+        #endregion 
+
+        #region 查询实时轨迹点
+        /// <summary>
+        /// 查询实时轨迹点
+        /// </summary>
+        /// <param name="qs"></param>
+        /// <returns></returns>
+        public static string GetRealTimeGps(NameValueCollection qs)
+        {
+            /* NameValueCollection 值列表
+             * ouid,appid,token,g_id,glsn
+             */
+
+            string recv = StandardFormat(MessageCode.MissKey);
+            if (qs == null || qs["ouid"] == null || qs["appid"] == null || qs["token"] == null || qs["g_id"] == null || qs["glsn"] == null)
+            {
+                MediaService.WriteLog("接收到GetRealTimeGps ：" + recv, MediaService.wirtelog);
+                return recv;
+            }
+            try
+            {
+                string appId = qs["appid"];
+                string glsn = GetUniform12(qs["glsn"]);
+                MediaService.WriteLog("接收到GetRealTimeGps ：ouid =" + qs["ouid"] + " app_id=" + appId + " token=" + qs["token"] + " g_id=" + qs["g_id"] + " glsn=" + glsn, MediaService.wirtelog);
+                MyCarAdapter.Gps_Info_Get_Real_Time_Data_Wgs(qs["ouid"], appId, qs["token"], glsn, qs["g_id"], ref recv);
+                return recv;
+            }
+            catch (Exception e)
+            {
+                return StandardFormat(MessageCode.DefaultError, e.StackTrace);
+            }
+        }
+        #endregion
+
+        #region 获取实时位置时，查询当前未完成里程的轨迹接口
+        /// <summary>
+        /// 获取实时位置时，查询当前未完成里程的轨迹接口
+        /// </summary>
+        /// <param name="qs"></param>
+        /// <returns></returns>
+        public static string GetTripRecord(NameValueCollection qs)
+        {
+            /* NameValueCollection 值列表
+             * ouid,appid,token,glsn
+             */
+
+            string recv = StandardFormat(MessageCode.MissKey);
+            if (qs == null || qs["ouid"] == null || qs["appid"] == null || qs["token"] == null || qs["glsn"] == null)
+            {
+                MediaService.WriteLog("接收到GetTripRecord ：" + recv, MediaService.wirtelog);
+                return recv;
+            }
+            try
+            {
+                string appId = qs["appid"];
+                string glsn =GetUniform12(qs["glsn"]);
+                MediaService.WriteLog("接收到GetTripRecord ：ouid =" + qs["ouid"] + " app_id=" + appId + " token=" + qs["token"] + " glsn=" + glsn, MediaService.wirtelog);
+                MyCarAdapter.Gps_Info_Get_Trip_Record_Wgs(qs["ouid"], appId, qs["token"], glsn, ref recv);
+                return recv;
+            }
+            catch (Exception e)
+            {
+                return StandardFormat(MessageCode.DefaultError, e.StackTrace);
+            }
+        }
+        #endregion
+
+        #region 获取实时数据流
+        /// <summary>
+        /// 获取实时数据流
+        /// </summary>
+        /// <param name="qs"></param>
+        /// <returns></returns>
+        public static string GetdfdatalistNew(NameValueCollection qs)
+        {
+            /* NameValueCollection 值列表
+             * ouid,appid,token,glsn
+             */
+
+            string recv = StandardFormat(MessageCode.MissKey);
+            if (qs == null || qs["ouid"] == null || qs["appid"] == null || qs["token"] == null || qs["glsn"] == null)
+            {
+                MediaService.WriteLog("接收到GetdfdatalistNew ：" + recv, MediaService.wirtelog);
+                return recv;
+            }
+            try
+            {
+                string appId = qs["appid"];
+                string glsn = GetUniform12(qs["glsn"]);
+                MediaService.WriteLog("接收到GetdfdatalistNew ：ouid =" + qs["ouid"] + " app_id=" + appId + " token=" + qs["token"] + " glsn=" + glsn, MediaService.wirtelog);
+                MyCarAdapter.Datastream_Getdfdatalistnew(qs["ouid"], appId, qs["token"], glsn, ref recv);
+                return recv;
+            }
+            catch (Exception e)
+            {
+                return StandardFormat(MessageCode.DefaultError, e.StackTrace);
+            }
+        }
+        #endregion
+        #endregion
+
+        #region 版本比较并更新
+        /// <summary>
+        /// 版本比较并更新
+        /// </summary>
+        /// <param name="qs"></param>
+        /// <returns></returns>
+        public static string GetLatestVersion(NameValueCollection qs)
+        {
+            /* NameValueCollection 值列表
+             * appid,vision_no
+             */
+
+            string recv = StandardFormat(MessageCode.MissKey);
+            if (qs == null || qs["appid"] == null || qs["vision_no"] == null)
+            {
+                MediaService.WriteLog("接收到GetLatestVersion ：" + recv, MediaService.wirtelog);
+                return recv;
+            }
+            try
+            {
+                string vision_no = qs["vision_no"];
+                string appid = qs["appid"];
+                MediaService.WriteLog("接收到GetLatestVersion ：appid =" + appid + " vision_no=" + vision_no, MediaService.wirtelog);
+                MyCarAdapter.Version_Latest(appid, vision_no, ref recv);
+                return recv;
+            }
+            catch (Exception e)
+            {
+                return StandardFormat(MessageCode.DefaultError, e.StackTrace);
+            }
+        }
+        #endregion
+
+        #endregion
+
+        #region 导航设置
+        #region 获取导航设置
+        /// <summary>
+        /// 获取导航设置
+        /// </summary>
+        /// <param name="qs"></param>
+        /// <returns></returns>
+        public static string GetNavSetting(NameValueCollection qs)
+        {
+            /* NameValueCollection 值列表
+             * uid
+             */
+
+            string recv = StandardFormat(MessageCode.MissKey);
+            if (qs == null || qs["uid"] == null)
+            {
+                MediaService.WriteLog("接收到GetNavSetting ：" + recv, MediaService.wirtelog);
+                return recv;
+            }
+            try
+            {
+                string uid = qs["uid"];
+                MediaService.WriteLog("接收到GetNavSetting ：uid=" + uid, MediaService.wirtelog);
+                string sql = "SELECT navsetting FROM app_users WHERE [uid]=" + uid;
+                object obj = SqlHelper.ExecuteScalar(sql);
+                if (obj != null)
+                {
+                    return StandardObjectFormat(MessageCode.Success, obj.ToString());
+                    //{"code":0,"msg":"","data":navsetting}
+                }
+                return StandardFormat(MessageCode.DefaultError);
+            }
+            catch (Exception e)
+            {
+                return StandardFormat(MessageCode.DefaultError, e.StackTrace);
+            }
+        }
+        #endregion
+
+        #region 修改导航设置
+        /// <summary>
+        /// 修改导航设置
+        /// </summary>
+        /// <param name="qs"></param>
+        /// <returns></returns>
+        public static string SetNavSetting(NameValueCollection qs)
+        {
+            /* NameValueCollection 值列表
+             * uid,navsetting
+             */
+
+            string recv = StandardFormat(MessageCode.MissKey);
+            if (qs == null || qs["uid"] == null || qs["navsetting"] == null)
+            {
+                MediaService.WriteLog("接收到GetRegion ：" + recv, MediaService.wirtelog);
+                return recv;
+            }
+            try
+            {
+                string navsetting = qs["navsetting"];
+                string uid = qs["uid"];
+                MediaService.WriteLog("接收到GetRegion ：uid =" + uid + " navsetting=" + navsetting, MediaService.wirtelog);
+                string sql = "UPDATE app_users SET navsetting=" + navsetting + " WHERE [uid]=" + uid;
+                SqlHelper.ExecuteNonQuery(sql);
+                return StandardObjectFormat(MessageCode.Success, "");
+            }
+            catch (Exception e)
+            {
+                return StandardFormat(MessageCode.DefaultError, e.StackTrace);
+            }
+        }
+        #endregion
+        #endregion
+
+        #region 设备在线状态
+        /// <summary>
+        /// 设备在线状态
+        /// </summary>
+        /// <param name="qs"></param>
+        /// <returns></returns>
+        public static string GetOnlineStatus(NameValueCollection qs)
+        {
+            /* NameValueCollection 值列表
+             * uid
+             */
+
+            string recv = StandardFormat(MessageCode.MissKey);
+            if (qs == null || qs["uid"] == null)
+            {
+                MediaService.WriteLog("接收到GetOnlineStatus ：" + recv, MediaService.wirtelog);
+                return recv;
+            }
+            try
+            {
+                int uid;
+                if (int.TryParse(qs["uid"], out uid))
+                {
+                    if (uid > 0)
+                    {
+                        UserObject uo;
+                        int isOnline = 0;
+                        if (MediaService.userDic.TryGetValue(uid, out uo))
+                        {
+                            if (uo != null && uo.socket[APPID] != null)
+                                isOnline = 1;
+                        }
+                        return StandardObjectFormat(MessageCode.Success, "{\"isOnline\":" + isOnline + "}");
+                    }
+                    return StandardFormat(MessageCode.DeviceNotExist);
+                }
+                return StandardFormat(MessageCode.FormatError);
+            }
+            catch (Exception e)
+            {
+                return StandardFormat(MessageCode.DefaultError, e.StackTrace);
+            }
+        }
+        #endregion
+    }
+}

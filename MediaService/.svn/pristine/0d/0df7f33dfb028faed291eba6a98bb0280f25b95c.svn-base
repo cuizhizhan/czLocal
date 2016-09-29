@@ -1,0 +1,141 @@
+﻿using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Text;
+using System.Threading.Tasks;
+
+namespace MediaService
+{
+    /// <summary>
+    /// 错误码
+    /// </summary>
+    public enum MessageCode : short
+    {
+        /// <summary>
+        /// 成功
+        /// </summary>
+        [DescriptAttribute("成功")]
+        Success = 0,
+
+        /// <summary>
+        /// 登陆失败
+        /// </summary>
+        [DescriptAttribute("登陆失败")]
+        LoginFail=80,
+        /// <summary>
+        /// 更新数据失败
+        /// </summary>
+        [DescriptAttribute("更新数据失败")]
+        UpdateFaild = 96,
+        /// <summary>
+        /// 删除数据失败
+        /// </summary>
+        [DescriptAttribute("删除数据失败")]
+        DeleteFaild = 97,
+        /// <summary>
+        /// 新增数据失败
+        /// </summary>
+        [DescriptAttribute("新增数据失败")]
+        InsertFaild = 98,
+        /// <summary>
+        /// 未知错误
+        /// </summary>
+        [DescriptAttribute("未知错误")]
+        DefaultError = 99,
+
+        /// <summary>
+        /// 传人的关键字缺失
+        /// </summary>
+        [DescriptAttribute("传人的关键字缺失")]
+        MissKey = 100,
+        /// <summary>
+        /// Token无效
+        /// </summary>
+        [DescriptAttribute("Token无效")]
+        TokenOverdue = 101,
+        /// <summary>
+        /// 格式有误
+        /// </summary>
+        [DescriptAttribute("格式有误")]
+        FormatError = 102,
+        /// <summary>
+        /// 查询设备不在线
+        /// </summary>
+        [DescriptAttribute("查询设备不在线")]
+        DeviceOutLine = 103,
+        /// <summary>
+        /// 未找到对应的设备
+        /// </summary>
+        [DescriptAttribute("未找到对应的设备")]
+        DeviceNotExist = 104,
+        /// <summary>
+        /// SN已经被注册
+        /// </summary>
+        [DescriptAttribute("SN已经被注册")]
+        SNExist = 105,
+        /// <summary>
+        /// 设备未绑定
+        /// </summary>
+        [DescriptAttribute("设备未绑定")]
+        DeviceNotBinding = 106,
+
+        /// <summary>
+        /// 频道号分配失败
+        /// </summary>
+        [DescriptAttribute("频道号分配失败")]
+        TalkAllocationFaild = 200,
+        /// <summary>
+        /// 频道创建失败
+        /// </summary>
+        [DescriptAttribute("频道创建失败")]
+        TalkCreateFaild = 201,
+        /// <summary>
+        /// 频道号无效
+        /// </summary>
+        [DescriptAttribute("频道号无效")]
+        TalkInvalid = 202,
+        /// <summary>
+        /// 频道已被占用
+        /// </summary>
+        [DescriptAttribute("频道已被占用")]
+        TalkExist = 203,
+        /// <summary>
+        /// 频道验证失败
+        /// </summary>
+        [DescriptAttribute("频道验证失败")]
+        TalkVerificationFaild = 204,
+        /// <summary>
+        /// 创建频道数量过多
+        /// </summary>
+        [DescriptAttribute("创建频道数量过多")]
+        TalkFull = 205,
+        /// <summary>
+        /// 频道不存在
+        /// </summary>
+        [DescriptAttribute("频道不存在")]
+        TalkNotExist = 206,
+        /// <summary>
+        /// 频道加入失败
+        /// </summary>
+        [DescriptAttribute("频道加入失败")]
+        TalkJoinFaild = 207,
+
+        /// <summary>
+        /// 新增用户已存在
+        /// </summary>
+        [DescriptAttribute("新增用户已存在")]
+        ContactExist = 300,
+
+        /// <summary>
+        /// Wifi不存在
+        /// </summary>
+        [DescriptAttribute("Wifi不存在")]
+        WifiNotExist = 400,
+
+        /// <summary>
+        /// IP验证失败
+        /// </summary>
+        [DescriptAttribute("IP验证失败")]
+        IPVerifiFailed=500,
+    }
+}

@@ -1,0 +1,410 @@
+﻿using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Text;
+using System.Threading.Tasks;
+using System.Net;
+using System.Net.Sockets;
+using System.Collections;
+using System.Runtime.InteropServices;
+using System.IO;
+using System.Data;
+using System.Threading;
+
+namespace MediaService
+{
+    public class SocketServer
+    {
+        private int m_numConnections;   // 要同时处理连接的最大数目
+        private int m_receiveBufferSize;// 要使用的每个 I/O 操作的套接字缓冲区大小
+        private int m_waiteConnections; // 等待连接的最大数目
+        Socket listenSocket;            // 服务端Socket
+        SocketAsyncEventArgsPool m_readWritePool;  //为可重用SocketAsyncEventArgs对象池
+        int m_numConnectedSockets;      // 客户端的总数连接到服务器 
+        Semaphore m_maxNumberAcceptedClients;  // 并发控制信号量
+        byte[] inOptionValues = null;
+
+        // 初始化服务数据,服务启动是通过Start开始
+        public SocketServer(int numConnections, int receiveBufferSize, int waiteConnections)
+        {
+            uint dummy = 0;
+            inOptionValues = new byte[Marshal.SizeOf(dummy) * 3];
+            BitConverter.GetBytes((uint)1).CopyTo(inOptionValues, 0);  //是否启用Keep-Alive
+            BitConverter.GetBytes((uint)30000).CopyTo(inOptionValues, Marshal.SizeOf(dummy));     //多长时间开始第一次探测
+            BitConverter.GetBytes((uint)5000).CopyTo(inOptionValues, Marshal.SizeOf(dummy) * 2); //探测时间间隔
+            m_numConnectedSockets = 0;
+            m_numConnections = numConnections;
+            m_waiteConnections = waiteConnections;
+            m_receiveBufferSize = receiveBufferSize;
+            m_readWritePool = new SocketAsyncEventArgsPool(numConnections);
+            m_maxNumberAcceptedClients = new Semaphore(numConnections, numConnections);
+        }
+
+        // 服务初始化
+        public void Init()
+        {
+            SocketAsyncEventArgs readWriteEventArg;
+
+            for (int i = 0; i < m_numConnections; i++)
+            {
+                readWriteEventArg = new SocketAsyncEventArgs();
+                readWriteEventArg.Completed += new EventHandler<SocketAsyncEventArgs>(IO_Completed);
+                AsyncUserToken userToken = new AsyncUserToken(m_receiveBufferSize);
+                readWriteEventArg.UserToken = userToken;
+                readWriteEventArg.SetBuffer(userToken.buffer, 0, 2);
+                m_readWritePool.Push(readWriteEventArg);        //将SocketAsyncEventArgs放入池
+            }
+        }
+
+        // 服务停止
+        public void Stop()
+        {
+            try
+            {
+                if (listenSocket != null)
+                {
+                    listenSocket.Shutdown(SocketShutdown.Both);
+                    listenSocket.Close();
+                }
+            }
+            catch (Exception err)
+            {
+                MediaService.WriteLog("停止socket服务异常：" + err.Message, MediaService.wirtelog);
+            }
+        }
+
+        // 开启服务阻塞端口侦听客户端连接
+        public void Start(int localPort)
+        {
+            while (true)
+            {
+                try
+                {
+                    IPEndPoint localEndPoint = new IPEndPoint(IPAddress.Any, localPort);
+                    listenSocket = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp);
+                    listenSocket.Bind(localEndPoint);   //侦听器绑定端口
+                    listenSocket.Listen(m_waiteConnections);         // 等待队列
+                    break;
+                }
+                catch (Exception err)
+                {
+                    MediaService.WriteLog("侦听服务启动异常：" + err.Message, true);
+                    Thread.Sleep(5000);
+                }
+            }
+            SocketAsyncEventArgs acceptEventArg = new SocketAsyncEventArgs();
+            acceptEventArg.Completed += new EventHandler<SocketAsyncEventArgs>(AcceptEventArg_Completed);
+
+            StartAccept(acceptEventArg);
+
+        }
+
+        // 异步socket事件
+        public void StartAccept(SocketAsyncEventArgs acceptEventArg)
+        {
+            try
+            {
+                acceptEventArg.AcceptSocket = null;
+                m_maxNumberAcceptedClients.WaitOne();
+                bool willRaiseEvent = listenSocket.AcceptAsync(acceptEventArg);
+                if (!willRaiseEvent)
+                {
+                    AcceptEventArg_Completed(null, acceptEventArg);
+                }
+            }
+            catch (Exception err)
+            {
+
+                MediaService.WriteLog("异常4" + err.Message, true);
+            }
+
+        }
+
+        // 此方法是与socket关联的回调方法。
+        void AcceptEventArg_Completed(object sender, SocketAsyncEventArgs e)
+        {
+
+            try
+            {
+                Interlocked.Increment(ref m_numConnectedSockets);
+                string ssss = "连接数：" + m_numConnectedSockets + "  " + m_readWritePool.Count;
+                IPEndPoint clientipe1 = (IPEndPoint)e.AcceptSocket.RemoteEndPoint;
+                ssss += "  " + clientipe1.Address + "  " + clientipe1.Port;
+                MediaService.WriteLog(ssss, true);
+
+                SocketAsyncEventArgs readEventArgs = m_readWritePool.Pop();   //从池中获取SocketAsyncEventArgs对象
+                e.AcceptSocket.SendTimeout = MediaService.maxSendTimeout;
+                ((AsyncUserToken)readEventArgs.UserToken).Socket = e.AcceptSocket;
+
+
+                e.AcceptSocket.IOControl(IOControlCode.KeepAliveValues, inOptionValues, null);
+                bool willRaiseEvent = e.AcceptSocket.ReceiveAsync(readEventArgs); // 侦听到客户端连接开始接受数据
+                if (!willRaiseEvent)
+                {
+                    ProcessReceive(readEventArgs);
+                }
+            }
+            catch (Exception err)
+            {
+                MediaService.WriteLog("侦听异常：" + err.Message, MediaService.wirtelog);
+                //throw new ArgumentException("侦听异常");
+            }
+            StartAccept(e);//继续侦听
+        }
+
+        // 当发送和接受完成时
+        void IO_Completed(object sender, SocketAsyncEventArgs e)
+        {
+            try
+            {
+                switch (e.LastOperation)//确定刚刚完成的操作的类型，并调用该关联的处理程序。
+                {
+                    case SocketAsyncOperation.Receive:
+                        ProcessReceive(e);
+                        break;
+                    case SocketAsyncOperation.Send:
+                        ProcessSend(e, 0, 2);
+                        break;
+                    default:
+                        throw new ArgumentException("操作已完成，但不是发送或接收操作");
+                }
+            }
+            catch (Exception err)
+            {
+                MediaService.WriteLog("IO_Completed异常：" + err.Message, MediaService.wirtelog);
+                CloseClientSocket(e);
+            }
+        }
+
+
+        // 异步接收操作   如果客户端关闭连接则关闭通信     如果接受到数据则分析协议并发送回客户端
+        private void ProcessReceive(SocketAsyncEventArgs e)
+        {
+            /*
+         * Buffer 规定
+         * Int16 2位 数据总长度
+         * Int16 2位 命令
+         * Int32 4位 格式保留
+         * 剩下字节  业务
+         */
+            try
+            {
+                AsyncUserToken token = (AsyncUserToken)e.UserToken;
+                if (e.BytesTransferred > 0 && e.SocketError == SocketError.Success)  //客户端是否关闭连接
+                {
+                    int offset = e.Offset + e.BytesTransferred;
+
+                    if (offset >= 2)
+                    {
+                        int packnum = System.BitConverter.ToInt16(token.buffer, 0);
+                        if (offset >= packnum && packnum >= 8)
+                        {
+                            short comm = System.BitConverter.ToInt16(token.buffer, 2);
+                            int index = System.BitConverter.ToInt32(token.buffer, 4);
+
+                            int sendlength = CommAction.commaction(packnum, comm, index, token);
+                            if (sendlength >= 8)
+                            {
+                                e.SetBuffer(0, sendlength);
+                                bool willRaiseEvent = token.Socket.SendAsync(e);
+                                if (!willRaiseEvent)
+                                {
+                                    ProcessSend(e, 0, 2);
+                                }
+                            }
+                            else if (sendlength == 0)
+                            {
+                                ProcessSend(e, 0, 2);
+                            }
+                            else
+                            {
+                                CloseClientSocket(e);
+                            }
+                        }
+                        else
+                        {
+                            if (packnum > m_receiveBufferSize || packnum < 8)
+                            {
+                                CloseClientSocket(e);
+                                MediaService.WriteLog("包长：" + packnum + " 包长非法，关闭连接", MediaService.wirtelog);
+                            }
+                            else
+                                ProcessSend(e, offset, packnum - offset);
+                        }
+                    }
+                    else
+                    {
+                        ProcessSend(e, offset, 2 - offset);
+                    }
+                }
+                else
+                {
+                    CloseClientSocket(e);
+                    string glsn = string.Empty;
+                    if (token != null)
+                        glsn = "用户sn： " + token.glsn.ToString() + "--------";
+                    MediaService.WriteLog(glsn + "客户端断开连接", MediaService.wirtelog);
+                }
+
+            }
+            catch (Exception err)
+            {
+                MediaService.WriteLog("接收异常：" + err.Message, MediaService.wirtelog);
+                ProcessSend(e, 0, 2);
+            }
+        }
+
+        // 发送过程
+        private void ProcessSend(SocketAsyncEventArgs e, int offest, int recelength)
+        {
+            try
+            {
+                if (e.SocketError == SocketError.Success)
+                {
+                    AsyncUserToken token = (AsyncUserToken)e.UserToken;
+
+                    e.SetBuffer(offest, recelength);
+                    bool willRaiseEvent = token.Socket.ReceiveAsync(e);//读取同客户端下一部分数据
+                    if (!willRaiseEvent)
+                    {
+                        ProcessReceive(e);
+                    }
+                }
+                else
+                {
+                    CloseClientSocket(e);
+                }
+            }
+            catch (Exception err)
+            {
+                MediaService.WriteLog("发送异常：" + err.Message, MediaService.wirtelog);
+                CloseClientSocket(e);
+            }
+        }
+
+        // 关闭与客户端连接的Socket
+        private void CloseClientSocket(SocketAsyncEventArgs e)
+        {
+            try
+            {
+                AsyncUserToken token = e.UserToken as AsyncUserToken;
+                UserObject uo = null;
+                if (token.uid != 0 && MediaService.userDic.TryGetValue(token.uid, out uo))
+                {
+                    if (uo.socket[token.appid] == token.Socket)
+                    {
+                        uo.socket[token.appid] = null;
+                        uo.lo[token.appid] = 0;
+                        uo.la[token.appid] = 0;
+                    }
+                }
+                try
+                {
+                    token.Socket.Shutdown(SocketShutdown.Both);
+                }
+                catch { }
+                token.Socket.Close();
+                CommAction.NoticeUserLineState(token.uid, token.appid, 0);
+                token.uid = 0;
+                token.appid = 0;
+                token.nickname = "";
+                token.Socket = null;
+                e.SetBuffer(0, 2);
+
+                Interlocked.Decrement(ref m_numConnectedSockets);
+                m_maxNumberAcceptedClients.Release();    ////递减计数器跟踪的客户端连接到服务器的总数
+
+                // 将SocketAsyncEventArg对象放回池一边其他对象能够使用
+                m_readWritePool.Push(e);
+            }
+            catch (Exception err)
+            {
+                MediaService.WriteLog("断开连接异常：" + err.Message, MediaService.wirtelog);
+            }
+        }
+    }
+
+    class AsyncUserToken
+    {
+        public Socket Socket;
+        public int appid = 0;
+        public int uid = 0;
+        public string nickname = "";
+        public string udpaddress = "";
+        public int glsn = 0;
+        public int prefixsn = 0;
+        public string praido = "";
+        public long radiomoditime = 0;
+        public byte[] buffer = null;
+        public AsyncUserToken(int receiveBufferSize)
+        {
+            buffer = new byte[receiveBufferSize];
+        }
+    }
+
+    public class UserObject
+    {
+        public string nickname = "";
+        public double[] lo = null;
+        public double[] la = null;
+        public double[] al = null;
+        public float[] vi = null;
+        public float[] di = null;
+        public int[] cid = null;
+        public Socket[] socket = null;
+        public string[] token = null;
+        public string ip = "";
+        public string udpaddress = "";
+        public int ver = 0;//版本
+
+        public UserObject(int appcount)
+        {
+            socket = new Socket[appcount];
+            token = new string[appcount];
+            lo = new double[appcount];
+            la = new double[appcount];
+            al = new double[appcount];
+            vi = new float[appcount];
+            di = new float[appcount];
+            cid = new int[appcount];
+        }
+    }
+
+    //SocketAsyncEventArgs池
+    class SocketAsyncEventArgsPool
+    {
+        Stack<SocketAsyncEventArgs> m_pool;
+
+        /// 初始化池
+        public SocketAsyncEventArgsPool(int capacity)
+        {
+            m_pool = new Stack<SocketAsyncEventArgs>(capacity);
+        }
+
+        /// 将用过的SocketAsyncEventArgs对象返回池
+        public void Push(SocketAsyncEventArgs item)
+        {
+            if (item == null) { throw new ArgumentNullException("加入到 SocketAsyncEventArgsPool 不能为 null"); }
+            lock (m_pool)
+            {
+                m_pool.Push(item);
+            }
+        }
+
+        /// 从池中返回去一个SocketAsyncEventArgs对象
+        public SocketAsyncEventArgs Pop()
+        {
+            lock (m_pool)
+            {
+                return m_pool.Pop();
+            }
+        }
+
+        /// 池大小{数量}
+        public int Count
+        {
+            get { return m_pool.Count; }
+        }
+
+    }
+}

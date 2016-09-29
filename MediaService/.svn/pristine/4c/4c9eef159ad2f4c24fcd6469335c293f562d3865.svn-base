@@ -1,0 +1,731 @@
+﻿using System;
+using System.Collections.Generic;
+using System.Collections;
+using System.ComponentModel;
+using System.Data;
+using System.Diagnostics;
+using System.Linq;
+using System.ServiceProcess;
+using System.Text;
+using System.Threading.Tasks;
+using System.IO;
+using System.Threading;
+using System.Net.Security;
+using System.Configuration;
+using MongoDB.Driver;
+using System.Collections.Concurrent;
+
+namespace MediaService
+{
+    public partial class MediaService : ServiceBase
+    {
+        /*vog平台：
+         * 1。支持多个APK同时接入，并且可以同时使用同一账号登陆不同的APK，通过 appid 区分
+         * 2。多个apk 之间可以发送消息，查看用户状态
+         * 3。开发历史  
+         *      a。早期开发的原型是依照golo4 平台开发的全SOCKET连接的云平台，（已经上线，只不过APK没有发布，）
+         *      b。中期叠加开发golo6 的云平台 （上线）
+         *      c。后期叠加开发goloz 的云平台 （上线）
+         * 4。平台支持业务的无限制扩充。
+         *      a。云平台不提供具体的应用功能，比如 电台，朋友圈，点歌，新闻，天气预报等等，对于云平台来说属于第三方服务。
+         *      b。云平台支持 用户信息管理，群组管理（约聊，车队），第三方服务管理，消息分发及推送，日志记录，公共频道管理
+         * */
+        public static SocketServer s = null;  // TCP SOCKET 服务端对象
+        public static SslStream[] sslStream = null;   //IOS推送证书全局对象数组
+        public static List<GPSinfo> gpsinfo = new List<GPSinfo>();    //实时经纬度LIST
+        public static List<Talkinfo> talkinfo = new List<Talkinfo>();  //信息 LIST
+        public static List<Logininfo> logininfo = new List<Logininfo>(); //登录 LIST
+        public static List<Talkinfo> radioinfo = new List<Talkinfo>();  //公共频道 LIST
+        public static List<DianZaninfo> dianzaninfo = new List<DianZaninfo>();  //点赞 list
+        public static List<Golo6Logininfo> golo6Logininfo = new List<Golo6Logininfo>(); //golo6 登录 LIST
+        public static List<Meitiinfo> meitiinfo = new List<Meitiinfo>();   //媒体播放记录 LIST
+        public static List<Newsinfo> newsinfo = new List<Newsinfo>();    //新闻播放记录list   赞时没有这个业务
+        public static List<CallTalkInfo> callTalkInfo = new List<CallTalkInfo>();    //频道呼叫
+        public static List<ResponseCallTalk> responseCallTalk = new List<ResponseCallTalk>();    //频道呼叫应答
+
+        public static int maxConnectionsNum = 10000;   //最大连接数
+        public static int maxSendTimeout = 1000;     //最大超时时间
+        public static int bufferSize = 1024;    ///数据包的最大长度
+        int waiteConnections = 10000;    //最大的等待连接数
+        int localPort = 7000;
+        Thread Recv_Thread;  // web服务端线程
+        Thread IosPush_Thread;   //iOS 推送线程
+        Thread TalkPush_Thread;   //IM 信息群发线程
+        Thread WriteLoLaToSQL_Thread; //写入MONGO 线程
+        Thread UdpServer_Thread;  //udp socket 服务端线程
+        public static List<IosSend> iosSendMessage = new List<IosSend>();  //ios  推送信息 list
+        public static List<TalkSend> talkSendMessage = new List<TalkSend>();//   群发信息 LIST
+        public static string ServiceID = "10";
+        public static string HttpServersUrl = "";
+        public static string wyDataBase = "";
+        public static bool wirtelog = true;
+        public static string log = "";
+        public static string[] words = null;
+        public static string faceurl = "";
+        public static string fileurl = "";
+        public static string shareurl = "";
+        public static int httptimeout = 10;
+        public static DataTable allapp = null;
+        public static DataTable districtapp = null;
+        public static string smsurl = "";
+        public static string ffmpeg = "";
+        public static string videoPicSize = "";
+        public static int cachetime = 30;
+        public static int turntime = 30;
+        public static int maxappid = 0;
+        public static int micover = 60;
+        public static int neardis = 10;
+        public static string Verification = "cxrerj54$*<>";
+        public static int nearmaxuser = 20;
+        public static bool micstate = true;
+        public static long mictime = 60;
+        public static int talk_count = 5;
+        public static int TalkRecordTime = 60;
+        public static MongoDatabase mongoDataBase = null;
+        public static bool mongoState = true;
+        public static ConcurrentDictionary<int, TalkMessage> talkDic = new ConcurrentDictionary<int, TalkMessage>();   //频道对讲字典
+        public static ConcurrentDictionary<int, UserObject> userDic = new ConcurrentDictionary<int, UserObject>();     //用户字典
+        public static ConcurrentDictionary<int, RadioObject> radioDic = new ConcurrentDictionary<int, RadioObject>();  //公共频道字典
+        public static ConcurrentDictionary<int, TalkState> stateDic = new ConcurrentDictionary<int, TalkState>();      //约聊用户字典
+        public static ConcurrentDictionary<int, int> mapDic = new ConcurrentDictionary<int, int>();                    //绑定字典
+
+        public static long radiomoditime = 0;
+
+        public MediaService()
+        {
+            InitializeComponent();
+        }
+
+        protected override void OnStart(string[] args)
+        {
+            WriteLog("----------------------启动服务-------------------------", true);
+            //服务启动执行，创建一个线程，所有工作在线程里执行
+            Thread init_Thread = new Thread(new ThreadStart(InitThread));
+            init_Thread.IsBackground = true;
+            init_Thread.Start();
+        }
+
+        protected override void OnStop()
+        {
+            try
+            {
+                s.Stop();
+            }
+            catch (Exception err)
+            {
+                WriteLog("停止服务异常：" + err.Message, true);
+            }
+        }
+        private void InitThread()
+        {
+            while (true)//初始化完成后，退出循环，否侧定时尝试初始化。
+            {   
+                //从配置文件或数据库 初始化平台数据 和连接
+                try
+                {
+                    ServiceID = ConfigurationManager.AppSettings["serverID"].ToString();
+                    localPort = Int32.Parse(ConfigurationManager.AppSettings["serverPort"].ToString());
+                    maxConnectionsNum = Int32.Parse(ConfigurationManager.AppSettings["maxConnectionsNum"].ToString()); 
+                    waiteConnections = Int32.Parse(ConfigurationManager.AppSettings["maxWaiteConnectionsNum"].ToString());
+                    maxSendTimeout = Int32.Parse(ConfigurationManager.AppSettings["maxSendTimeout"].ToString());
+                    bufferSize = Int32.Parse(ConfigurationManager.AppSettings["connectionBufferSize"].ToString());
+                    HttpServersUrl = ConfigurationManager.AppSettings["httpServersUrl"].ToString();
+                    httptimeout = Int32.Parse(ConfigurationManager.AppSettings["httpTimeOut"].ToString());
+                    wyDataBase = ConfigurationManager.ConnectionStrings["weiyunDB"].ToString();
+                    faceurl = ConfigurationManager.AppSettings["faceSavePath"].ToString();
+                    fileurl = ConfigurationManager.AppSettings["fileSavePath"].ToString();
+                    shareurl = ConfigurationManager.AppSettings["shareSavePath"].ToString();
+                    ffmpeg = ConfigurationManager.AppSettings["ffmpeg"].ToString();
+                    words = ConfigurationManager.AppSettings["registWord"].ToString().Split('|');
+                    wirtelog = ConfigurationManager.AppSettings["writeEerrorLog"].ToString() == "true" ? true : false;
+                    cachetime = Int32.Parse(ConfigurationManager.AppSettings["cachetime"].ToString());
+                    turntime = Int32.Parse(ConfigurationManager.AppSettings["turntime"].ToString());
+                    micover = Int32.Parse(ConfigurationManager.AppSettings["micover"].ToString());
+                    neardis = Int32.Parse(ConfigurationManager.AppSettings["neardis"].ToString());
+                    Verification =ConfigurationManager.AppSettings["Verification"].ToString();
+                    nearmaxuser = Int32.Parse(ConfigurationManager.AppSettings["nearmaxuser"].ToString());
+                    talk_count = Int32.Parse(ConfigurationManager.AppSettings["talk_count"].ToString());
+                    TalkRecordTime = Int32.Parse(ConfigurationManager.AppSettings["talk_recordtime"].ToString());
+
+                    string mongoIP = ConfigurationManager.AppSettings["mongoIP"].ToString();
+                    int mongoPort = Int32.Parse(ConfigurationManager.AppSettings["mongoPort"].ToString());
+                    string mongoDB = ConfigurationManager.AppSettings["mongoDB"].ToString();
+                    string mongoUsername = ConfigurationManager.AppSettings["mongoUsername"].ToString();
+                    string mongoPassword = ConfigurationManager.AppSettings["mongoPassword"].ToString();
+
+                    try
+                    {
+                        MongoServerSettings mongServerSet = new MongoServerSettings();
+                        mongServerSet.ConnectTimeout = new TimeSpan(0, 0, 5);
+                        mongServerSet.SocketTimeout = new TimeSpan(0, 0, 5);
+                        mongServerSet.WaitQueueTimeout = new TimeSpan(0, 0, 5);
+                        mongServerSet.Server = new MongoServerAddress(mongoIP, mongoPort);
+                        //mongServerSet.Credentials = new[] { MongoCredential.CreateMongoCRCredential(mongoDB, mongoUsername, mongoPassword) };
+                        MongoServer mongoServer = new MongoServer(mongServerSet); //连接数据库
+                        mongoDataBase = mongoServer.GetDatabase(mongoDB);//选择数据库名
+                    }
+                    catch (Exception err)
+                    {
+                        MediaService.WriteLog("初始化mongo异常：" + err.Message, MediaService.wirtelog);
+                        Thread.Sleep(5000);
+                        continue;
+                    }
+                    try
+                    {
+                        if (!Directory.Exists(AppDomain.CurrentDomain.BaseDirectory + "\\log"))
+                        {
+                            Directory.CreateDirectory(AppDomain.CurrentDomain.BaseDirectory + "\\log");
+                        }
+                    }
+                    catch { }
+
+                    while (allapp == null&&districtapp==null)
+                    {
+                        try
+                        {
+                            allapp = SqlHelper.ExecuteTable("select * from [app_list] where state>0");
+                            object obj = MediaService.allapp.Compute("max(id)", "");
+                            maxappid = Int32.Parse(obj.ToString()) + 1;
+                            sslStream = new SslStream[maxappid];
+                            districtapp = SqlHelper.ExecuteTable("select * from [app_district]");
+
+                            DataTable radiodt = SqlHelper.ExecuteTable("select * from [wy_radio]");
+                            for (int i = 0; i < radiodt.Rows.Count; i++ )
+                            {
+                                int rid = Int32.Parse(radiodt.Rows[i]["rid"].ToString());
+                                RadioObject ro = new RadioObject();
+                                ro.channelname = radiodt.Rows[i]["channelname"].ToString();
+                                ro.cityname = radiodt.Rows[i]["cityname"].ToString();
+                                ro.areaid = Int32.Parse(radiodt.Rows[i]["areaid"].ToString());
+                                ro.audiourl = radiodt.Rows[i]["audiourl"].ToString();
+                                ro.uploadurl = radiodt.Rows[i]["uploadurl"].ToString();
+                                ro.sendtype = Int32.Parse(radiodt.Rows[i]["sendtype"].ToString());
+                                ro.channelde = Int32.Parse(radiodt.Rows[i]["channelde"].ToString());
+                                ro.radiotype = Int32.Parse(radiodt.Rows[i]["radiotype"].ToString());
+                                ro.imageurl = radiodt.Rows[i]["imageurl"].ToString();
+                                ro.thumburl = radiodt.Rows[i]["thumburl"].ToString();
+                                if (ro.sendtype > 0)
+                                {
+                                    string[] uidstr = radiodt.Rows[i]["sendtype"].ToString().Trim(',').Split(',');
+                                    if (uidstr.Length > 0)
+                                    {
+                                        ro.senduid = new int[uidstr.Length];
+                                        for (int j = 0; j < uidstr.Length; j++)
+                                        {
+                                            ro.senduid[j] = Int32.Parse(uidstr[j]);
+                                        }
+                                    }
+                                }
+                                ro.prid = Int32.Parse(radiodt.Rows[i]["prid"].ToString());
+                                ro.areacode = radiodt.Rows[i]["areacode"].ToString();
+                                ro.flashimageurl = radiodt.Rows[i]["flashimageurl"].ToString();
+                                radioDic.TryAdd(rid, ro);    
+                            }
+                            obj = SqlHelper.ExecuteScalar("select top 1 updatetime from [wy_radio] order by updatetime desc");
+                            if(obj!=null)
+                            {
+                                DateTime dt = DateTime.Parse(obj.ToString());
+                                radiomoditime = dt.ToUniversalTime().Ticks / 10000000 - 62135596800;
+                            }
+
+                            DataTable uidMapDt = SqlHelper.ExecuteTable("SELECT ouid, [uid] FROM [dbo].[wy_uidmap]");
+                            foreach (DataRow row in uidMapDt.Rows)
+                            {
+                                mapDic.TryAdd(int.Parse(row["uid"].ToString()), int.Parse(row["ouid"].ToString()));
+                            }
+                        }
+                        catch (Exception err)
+                        {
+                            MediaService.WriteLog("初始化服务连接数据库异常：" + err.Message, MediaService.wirtelog);
+                        }
+                        Thread.Sleep(5000);
+                    }
+                    s = new SocketServer(maxConnectionsNum, bufferSize, waiteConnections);//tcp socket 服务端初始化
+                    s.Init();
+                    s.Start(localPort);
+
+                    Recv_Thread = new Thread(new ThreadStart(HttpService.RecvThread)); // web服务端 初始化
+                    Recv_Thread.IsBackground = true;
+                    Recv_Thread.Start();
+                    IosPush_Thread = new Thread(new ThreadStart(IphoneMessagePush.IosPushThread)); //iOS 推送线程初始化
+                    IosPush_Thread.IsBackground = true;
+                    IosPush_Thread.Start();
+                    TalkPush_Thread = new Thread(new ThreadStart(TalkMessagePush.TalkPushThread)); //IM 信息群发线程初始化
+                    TalkPush_Thread.IsBackground = true;
+                    TalkPush_Thread.Start();
+                    WriteLoLaToSQL_Thread = new Thread(new ThreadStart(WriteLoLaToSQLThread)); //写入MONGO 线程初始化
+                    WriteLoLaToSQL_Thread.IsBackground = true;
+                    WriteLoLaToSQL_Thread.Start();
+                    UdpServer_Thread = new Thread(new ThreadStart(UdpServer.UdpServerStart));//udp socket 服务端初始化
+                    UdpServer_Thread.IsBackground = true;
+                    UdpServer_Thread.Start();
+                    DianZanTimer.Instance.Start();
+                    CallBackService.Instance.StartService();
+                    WriteLog("----------------------服务启动完成-------------------------", true);
+                    break;
+                    //初始化完成后，退出循环。
+                }
+                catch (Exception err)
+                {
+                    WriteLog("初始化服务异常：" + err.Message, true);
+                    Thread.Sleep(5000);
+                }
+            }
+        }
+        private void WriteLoLaToSQLThread()
+        {
+            List<GPSinfo> mongoGPS = new List<GPSinfo>();     
+            List<Talkinfo> mongoTalk = new List<Talkinfo>();
+            List<Talkinfo> mongoRadio = new List<Talkinfo>();
+            List<Meitiinfo> mongoMeiti = new List<Meitiinfo>();
+            List<Newsinfo> mongoNews = new List<Newsinfo>();
+            List<DianZaninfo> mongodz = new List<DianZaninfo>();
+            List<CallTalkInfo> mongoCallTalk = new List<CallTalkInfo>();
+            List<ResponseCallTalk> mongoResponseCallTalk = new List<ResponseCallTalk>();
+            while (true)
+            {
+                try
+                {
+                    #region 经纬度
+                    if (gpsinfo.Count < 1)
+                    {
+                        Thread.Sleep(500);
+                    }
+                    else
+                    {
+                        int gpsCount = gpsinfo.Count;
+                        if (gpsCount > 100) gpsCount = 100;
+                        for (int i = 0; i < gpsCount; i++)
+                        {
+                            if (gpsinfo[i] != null)
+                                mongoGPS.Add(gpsinfo[i]);
+                        }
+                        gpsinfo.RemoveRange(0, gpsCount);
+                        if (mongoGPS.Count > 0)
+                        {
+                            try
+                            {
+                                MongoCollection mongoCollection = mongoDataBase.GetCollection("gps_" + DateTime.Now.ToString("yyyyMMdd"));//选择集合
+                                mongoCollection.InsertBatch(typeof(GPSinfo), mongoGPS);
+                            }
+                            catch (Exception err)
+                            {
+                                WriteLog("WriteLoLaToMongo错误_经纬度：" + err.Message, true);
+                            }
+                            finally
+                            {
+                                mongoGPS.Clear();
+                            }
+                        }
+                    }
+                    #endregion
+
+                    #region 对讲记录
+                    if (talkinfo.Count > 0)
+                    {
+                        int talkCount = talkinfo.Count;
+                        if (talkCount > 100) talkCount = 100;
+                        for (int i = 0; i < talkCount; i++)
+                        {
+                            if (talkinfo[i] != null)
+                                mongoTalk.Add(talkinfo[i]);
+                        }
+                        talkinfo.RemoveRange(0, talkCount);
+                        if (mongoTalk.Count > 0)
+                        {
+                            try
+                            {
+                                MongoCollection mongoCollection = mongoDataBase.GetCollection("talk_" + DateTime.Now.ToString("yyyyMMdd"));//选择集合
+                                mongoCollection.InsertBatch(typeof(Talkinfo), mongoTalk);
+                            }
+                            catch (Exception err)
+                            {
+                                WriteLog("WriteLoLaToMongo错误_对讲记录：" + err.Message, true);
+                            }
+                            finally
+                            {
+                                mongoTalk.Clear();
+                            }
+                        }
+                    }
+                    #endregion
+
+                    #region 公共频道对讲记录
+                    if (radioinfo.Count > 0)
+                    {
+                        int talkCount = radioinfo.Count;
+                        if (talkCount > 100) talkCount = 100;
+                        for (int i = 0; i < talkCount; i++)
+                        {
+                            if (radioinfo[i] != null)
+                                mongoRadio.Add(radioinfo[i]);
+                        }
+                        radioinfo.RemoveRange(0, talkCount);
+                        if (mongoRadio.Count > 0)
+                        {
+                            try
+                            {
+                                MongoCollection mongoCollection = mongoDataBase.GetCollection("radio_" + DateTime.Now.ToString("yyyyMMdd"));//选择集合
+                                mongoCollection.InsertBatch(typeof(Talkinfo), mongoRadio);
+                            }
+                            catch (Exception err)
+                            {
+                                WriteLog("WriteLoLaToMongo错误_对讲记录：" + err.Message, true);
+                            }
+                            finally
+                            {
+                                mongoRadio.Clear();
+                            }
+                        }
+                    }
+                    #endregion
+
+                    #region 媒体播放记录
+                    if (meitiinfo.Count > 0)
+                    {
+                        int meitiCount = meitiinfo.Count;
+                        if (meitiCount > 100) meitiCount = 100;
+                        for (int i = 0; i < meitiCount; i++)
+                        {
+                            if (meitiinfo[i] != null)
+                                mongoMeiti.Add(meitiinfo[i]);
+                        }
+                        meitiinfo.RemoveRange(0, meitiCount);
+                        if (mongoMeiti.Count > 0)
+                        {
+                            try
+                            {
+                                MongoCollection mongoCollection = mongoDataBase.GetCollection("play_log_" + DateTime.Now.ToString("yyyyMM"));//选择集合
+                                mongoCollection.InsertBatch(typeof(Meitiinfo), mongoMeiti);
+                            }
+                            catch (Exception err)
+                            {
+                                WriteLog("WriteLoLaToMongo错误_媒体播放记录：" + err.Message, true);
+                            }
+                            finally
+                            {
+                                mongoMeiti.Clear();
+                            }
+                        }
+                    }
+                    #endregion
+
+                    #region 新闻播放记录
+                    if (newsinfo.Count > 0)
+                    {
+                        int newsCount = newsinfo.Count;
+                        if (newsCount > 100) newsCount = 100;
+                        for (int i = 0; i < newsCount; i++)
+                        {
+                            if (newsinfo[i] != null)
+                                mongoNews.Add(newsinfo[i]);
+                        }
+                        newsinfo.RemoveRange(0, newsCount);
+                        if (mongoNews.Count > 0)
+                        {
+                            try
+                            {
+                                MongoCollection mongoCollection = mongoDataBase.GetCollection("newsplay_log_" + DateTime.Now.ToString("yyyyMM"));//选择集合
+                                mongoCollection.InsertBatch(typeof(Newsinfo), mongoNews);
+                            }
+                            catch (Exception err)
+                            {
+                                WriteLog("WriteLoLaToMongo错误_新闻播放记录：" + err.Message, true);
+                            }
+                            finally
+                            {
+                                mongoNews.Clear();
+                            }
+                        }
+                    }
+                    #endregion
+
+                    #region 登录记录
+                    MongoCollection mongoLoginCollection = MediaService.mongoDataBase.GetCollection("golo_login_" + DateTime.Now.ToString("yyyyMMdd"));//选择集合
+                    while (logininfo.Count > 0)
+                    {
+                        try
+                        {
+                            QueryDocument bdoc = new QueryDocument();
+                            bdoc.Add("uid", logininfo[0].uid);
+                            bdoc.Add("ts", logininfo[0].ts);
+                            bdoc.Add("te", logininfo[0].te);
+                            QueryDocument q = new QueryDocument();
+                            q.Add("ts", logininfo[0].ts);
+                            q.Add("uid", logininfo[0].uid);
+                            IMongoQuery iq = q;
+                            IMongoUpdate iu = new UpdateDocument(bdoc);
+                            mongoLoginCollection.Update(iq, iu, UpdateFlags.Upsert);
+                        }
+                        catch (Exception err)
+                        {
+                            WriteLog("WriteLoLaToMongo错误_golo登录记录：" + err.Message, true);
+                        }
+                        finally
+                        {
+                            logininfo.RemoveAt(0);
+                        }
+                    }
+                    #endregion
+
+                    #region 登录6记录
+                    MongoCollection mongo6LoginCollection = MediaService.mongoDataBase.GetCollection("golo6_login_" + DateTime.Now.ToString("yyyyMMdd"));//选择集合
+                    while (golo6Logininfo.Count > 0)
+                    {
+                        try
+                        {
+                            QueryDocument bdoc = new QueryDocument();
+                            bdoc.Add("uid", golo6Logininfo[0].uid);
+                            bdoc.Add("ts", golo6Logininfo[0].ts);
+                            bdoc.Add("te", golo6Logininfo[0].te);
+                            QueryDocument q = new QueryDocument();
+                            q.Add("ts", golo6Logininfo[0].ts);
+                            q.Add("uid", golo6Logininfo[0].uid);
+                            IMongoQuery iq = q;
+                            IMongoUpdate iu = new UpdateDocument(bdoc);
+                            mongo6LoginCollection.Update(iq, iu, UpdateFlags.Upsert);
+                        }
+                        catch (Exception err)
+                        {
+                            WriteLog("WriteLoLaToMongo错误_golo6登录记录：" + err.Message, true);
+                        }
+                        finally
+                        {
+                            golo6Logininfo.RemoveAt(0);
+                        }
+                    }
+                    #endregion
+
+                    #region 点赞记录
+                    if (dianzaninfo.Count > 0)
+                    {
+                        int dzCount = dianzaninfo.Count;
+                        if (dzCount > 100) dzCount = 100;
+                        for (int i = 0; i < dzCount; i++)
+                        {
+                            if (dianzaninfo[i] != null)
+                                mongodz.Add(dianzaninfo[i]);
+                        }
+                        dianzaninfo.RemoveRange(0, dzCount);
+                        if (mongodz.Count > 0)
+                        {
+                            try
+                            {
+                                MongoCollection mongoCollection = mongoDataBase.GetCollection("dz_" + DateTime.Now.ToString("yyyyMMdd"));//选择集合
+                                mongoCollection.InsertBatch(typeof(DianZaninfo), mongodz);
+                            }
+                            catch (Exception err)
+                            {
+                                WriteLog("WriteLoLaToMongo错误_点赞记录：" + err.Message, true);
+                            }
+                            finally
+                            {
+                                mongodz.Clear();
+                            }
+                        }
+                    }
+                    #endregion
+
+                    #region 频道呼叫
+                    if (callTalkInfo.Count > 0)
+                    {
+                        int ctCount = callTalkInfo.Count;
+                        if (ctCount > 100) ctCount = 100;
+                        for (int i = 0; i < ctCount; i++)
+                        {
+                            if (callTalkInfo[i] != null)
+                                mongoCallTalk.Add(callTalkInfo[i]);
+                        }
+                        callTalkInfo.RemoveRange(0, ctCount);
+                        if (mongoCallTalk.Count > 0)
+                        {
+                            try
+                            {
+                                CallTalkMongoDBOption.SaveCallTalk(mongoCallTalk);
+                            }
+                            catch (Exception err)
+                            {
+                                WriteLog("WriteLoLaToMongo错误_频道呼叫：" + err.Message, true);
+                            }
+                            finally
+                            {
+                                mongoCallTalk.Clear();
+                            }
+                        }
+                    }
+                    #endregion
+
+                    #region 频道呼叫应答
+                    if (responseCallTalk.Count > 0)
+                    {
+                        int rctCount = responseCallTalk.Count;
+                        if (rctCount > 100) rctCount = 100;
+                        for (int i = 0; i < rctCount; i++)
+                        {
+                            if (responseCallTalk[i] != null)
+                                mongoResponseCallTalk.Add(responseCallTalk[i]);
+                        }
+                        responseCallTalk.RemoveRange(0, rctCount);
+                        if (mongoResponseCallTalk.Count > 0)
+                        {
+                            try
+                            {
+                                CallTalkMongoDBOption.SaveResponseCallTalk(mongoResponseCallTalk);
+                            }
+                            catch (Exception err)
+                            {
+                                WriteLog("WriteLoLaToMongo错误_频道呼叫应答：" + err.Message, true);
+                            }
+                            finally
+                            {
+                                mongoResponseCallTalk.Clear();
+                            }
+                        }
+                    }
+                    #endregion
+                }
+                catch (Exception err)
+                {
+                    WriteLog("WriteLoLaToSQLThread错误_异常：" + err.Message, true);
+                    Thread.Sleep(2000);
+                }
+            }
+        }
+
+        public static void WriteLog(string msg, bool system) //写错误日志
+        {
+            if (wirtelog || system)
+            {
+                try
+                {
+                    DateTime dt = DateTime.Now;
+                    if(!Directory.Exists( AppDomain.CurrentDomain.BaseDirectory + "\\log\\" + dt.ToString("yyyy") + "\\" + dt.ToString("MM") + "\\" + dt.ToString("dd")))
+                    {
+                        Directory.CreateDirectory( AppDomain.CurrentDomain.BaseDirectory + "\\log\\" + dt.ToString("yyyy") + "\\" + dt.ToString("MM") + "\\" + dt.ToString("dd"));
+                    }
+                    StreamWriter sw = new StreamWriter(AppDomain.CurrentDomain.BaseDirectory + "\\log\\" + dt.ToString("yyyy") + "\\" + dt.ToString("MM") + "\\" + dt.ToString("dd") + "\\" + dt.Hour + ".txt", true);
+                    sw.WriteLine(dt.ToString("HH:mm:ss fff") + " " + msg);
+                    sw.Close();
+                    if (log.Length > 50000)
+                    {
+                        log = log.Remove(50000);
+                    }
+                    log = dt.ToString("HH:mm:ss fff") + " " + msg + "<br />" + log;
+                }
+                catch { }
+            }
+        }
+    }
+    public class GPSinfo
+    {
+        public double lo;      //经度
+        public double la;      //纬度
+        public double al;      //高度
+        public float vi;    //速度
+        public float di;//方向
+        public int uid;  //用户id
+        public long t; //时间
+        public int cid;
+
+        public GPSinfo(double _lo, double _la, double _al, float _vi, float _di, int _uid, long _time,int _cityid)
+        {
+            lo = _lo;
+            la = _la;
+            al = _al;
+            vi = _vi;
+            di = _di;
+            uid = _uid;
+            t = _time;
+            cid = _cityid;
+        }
+    }
+    public class Talkinfo
+    {
+        public int tid;
+        public int uid;
+        public long t;
+        public Talkinfo(int _tid, int _uid, long _time)
+        {
+            tid = _tid;
+            uid = _uid;
+            t = _time;
+        }
+    }
+    public class Meitiinfo
+    {
+        public string mid;
+        public int uid;
+        public string type;
+        public long time;
+        public string state;
+        public Meitiinfo(string _mid, int _uid,string _type,string _state, long _time)
+        {
+            mid = _mid;
+            uid = _uid;
+            type = _type;
+            state = _state;
+            time = _time;
+        }
+    }
+    public class Newsinfo
+    {
+        public string nid;
+        public int uid;
+        public string type;
+        public long time;
+        public string state;
+        public Newsinfo(string _nid, int _uid, string _type, string _state, long _time)
+        {
+            nid = _nid;
+            uid = _uid;
+            type = _type;
+            state = _state;
+            time = _time;
+        }
+    }
+    public class Logininfo
+    {
+        public int uid;
+        public long ts;
+        public long te;
+        public Logininfo(int _uid, long _ts, long _te)
+        {
+            uid = _uid;
+            ts = _ts;
+            te = _te;
+        }
+    }
+
+    public class DianZaninfo
+    {
+        public int channel = 0;
+        public int uid = 0;
+        public int ouid = 0;
+        public string file = "";
+        public long time = 0;
+        public int tlen = 0;
+
+        public DianZaninfo(int _channel, int _uid, int _ouid, string _file, int _tlen, long _time)
+        {
+            channel = _channel;
+            uid = _uid;
+            ouid = _ouid;
+            file = _file;
+            tlen = _tlen;
+            time = _time;
+        }
+    }
+
+    public class Golo6Logininfo
+    {
+        public int uid;
+        public long ts;
+        public long te;
+        public Golo6Logininfo(int _uid, long _ts, long _te)
+        {
+            uid = _uid;
+            ts = _ts;
+            te = _te;
+        }
+    }
+}

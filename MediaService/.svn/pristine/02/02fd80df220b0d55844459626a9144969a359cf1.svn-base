@@ -1,0 +1,98 @@
+﻿using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Text;
+using System.Threading.Tasks;
+using System.Net;
+using System.IO;
+using System.Runtime.Serialization.Json;
+using System.Data;
+using System.Collections.Specialized;
+using System.Collections;
+namespace MediaService
+{
+    class HttpGoloBusiness
+    { 
+        #region 报警播报
+        public static string CarAlarm(NameValueCollection qs)
+        {
+            string recv = "{\"status\":false}";
+            if (qs != null && qs["sn"] != null && qs["message"] != null && qs["appid"] != null && qs["alarmtype"] != null)
+            {
+                int appid = Int32.Parse(qs["appid"].ToString());
+                string sn = qs["sn"].ToString().Replace("'","");
+                string message = qs["message"].ToString();
+                string alarmtype = qs["alarmtype"].ToString().Replace("'", "");
+                try
+                {
+                    DateTime dt = DateTime.Now;
+                    StreamWriter sw = new StreamWriter(AppDomain.CurrentDomain.BaseDirectory + "\\alarm\\" + dt.ToString("yyyyMMdd") + ".txt", true);
+                    sw.WriteLine(dt.ToString("HH:mm:ss") + " sn=" + sn + "  alarmtype=" + alarmtype + "   message=" + message);
+                    sw.Close();
+                }
+                catch { }
+                MediaService.WriteLog("接收到报警播报 ：sn=" + sn + "  alarmtype=" + alarmtype + "   message=" + message, MediaService.wirtelog);
+                object obj = SqlHelper.ExecuteScalar("select uid from [app_users] where glsn='" + sn + "'");
+                if (obj != null)
+                {
+                    StringBuilder sb = new StringBuilder("{\"status\":true,\"type\":108,\"message\":{\"state\":true,\"alarmtype\":" + alarmtype + "}");
+                    //int count = sb.Length;
+                    //if (alarmtype == "31")
+                    //{
+                    //    sb.Append(alarmtype);
+                    //    sb.Append(",\"txt\":\"咕噜提醒,您已驶出了电子围栏！\"}");
+                    //}
+                    //else if (alarmtype == "32")
+                    //{
+                    //    sb.Append(alarmtype);
+                    //    sb.Append(",\"txt\":\"咕噜提醒,您已驶入了电子围栏！\"}");
+                    //}
+                    //else if (alarmtype == "1")
+                    //{
+                    //    sb.Append(alarmtype);
+                    //    sb.Append(",\"txt\":\"咕噜检测到您的车辆有故障提示,请安全停车后确认！\"}");
+                    //}
+                    //if (sb.Length > count)
+                    //{
+                    List<int> uidlist = new List<int>();
+                    uidlist.Add(Int32.Parse(obj.ToString()));
+                    PublicClass.SendToOnlineUserList(null, sb.ToString(), "", uidlist, 99, 0, CommType.pushMessageToUser, appid);
+                    //}
+                }
+                recv = "{\"status\":true}";
+            }
+            return recv;
+        }
+        #endregion
+
+        #region 用户Ip验证
+        public static bool UserIpVerification(int uid, string ip)
+        {
+            bool state = false;
+            object obj = SqlHelper.ExecuteScalar("select uid from [app_users] where uid=" + uid);
+            if (obj != null)
+            {
+                if (ip == "127.0.0.1")
+                {
+                    state=true;
+                }
+                else
+                {
+                    UserObject uo = null;
+                    if (MediaService.userDic.TryGetValue(uid, out uo))
+                    {
+                        if (uo.ip != null && uo.ip != "")
+                        {
+                            if (uo.ip == ip)
+                                return true;
+                        }
+                    }
+                }
+            }
+            return state;
+        }
+        #endregion
+
+    }
+}
+

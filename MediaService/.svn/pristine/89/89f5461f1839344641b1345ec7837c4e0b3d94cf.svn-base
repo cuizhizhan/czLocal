@@ -1,0 +1,100 @@
+﻿using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Text;
+using System.Data;
+using System.Threading.Tasks;
+using System.Data.SqlClient;
+
+namespace MediaService
+{
+    class SqlHelper
+    {
+        public static string connectionString = MediaService.wyDataBase;
+
+        /// <summary>   
+        /// 执行update,delete 语句，返回影响的记录数   
+        /// </summary>   
+        /// <param name="SQLString">SQL语句</param>   
+        /// <returns>影响的记录数</returns>   
+        public static int ExecuteNonQuery(string SQLString)
+        {
+            using (SqlConnection connection = new SqlConnection(connectionString))
+            {
+                using (SqlCommand cmd = new SqlCommand(SQLString, connection))
+                {
+                    try
+                    {
+                        connection.Open();
+                        return cmd.ExecuteNonQuery();
+                    }
+                    catch (System.Data.SqlClient.SqlException E)
+                    {
+                        throw new Exception(E.Message);
+                    }
+                    finally
+                    {
+                        connection.Close();
+                    }
+                }
+            }
+        }
+
+
+        /// <summary>   
+        /// 执行查询结果语句，返回查询结果（object）。   
+        /// </summary>   
+        /// <param name="SQLString">查询结果语句</param>   
+        /// <returns>查询结果（object）</returns>   
+        public static object ExecuteScalar(string SQLString)
+        {
+            using (SqlConnection connection = new SqlConnection(connectionString))
+            {
+                using (SqlCommand cmd = new SqlCommand(SQLString, connection))
+                {
+                    try
+                    {
+                        connection.Open();
+                        return cmd.ExecuteScalar();
+                    }
+                    catch (System.Data.SqlClient.SqlException e)
+                    {
+                        throw new Exception(e.Message);
+                    }
+                    finally
+                    {
+                        connection.Close();
+                    }
+                }
+            }
+        }
+
+        /// <summary>   
+        /// 执行查询语句，返回DataTable   
+        /// </summary>   
+        /// <param name="SQLString">查询语句</param>   
+        /// <returns>DataTable</returns>   
+        public static DataTable ExecuteTable(string SQLString)
+        {
+            using (SqlConnection connection = new SqlConnection(connectionString))
+            {
+                DataTable dt = new DataTable();
+                try
+                {
+                    connection.Open();
+                    SqlDataAdapter command = new SqlDataAdapter(SQLString, connection);
+                    command.Fill(dt);
+                    return dt;
+                }
+                catch (System.Data.SqlClient.SqlException ex)
+                {
+                    throw new Exception(ex.Message);
+                }
+                finally
+                {
+                    connection.Close();
+                }
+            }
+        }
+    }
+}

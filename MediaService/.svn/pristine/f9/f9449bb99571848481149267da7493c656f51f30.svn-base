@@ -1,0 +1,55 @@
+﻿<?xml version="1.0" encoding="utf-8" ?>
+<configuration>
+  <configSections>
+    <section name="Proxies" type="MediaService.Proxies"/>
+  </configSections>
+  <startup>
+    <supportedRuntime version="v4.0" sku=".NETFramework,Version=v4.5.1" />
+  </startup>
+  <system.net>
+    <connectionManagement>
+      <add address="*" maxconnection="1024"/>
+    </connectionManagement>
+  </system.net>
+  <connectionStrings>
+    <add name="weiyunDB" providerName="System.Data.SqlClient" connectionString="server=192.168.190.90,1433;User ID=weiyun;Password=1234poiu;database=weiyun"/>
+  </connectionStrings>
+  <appSettings>
+    <add key="serverID" value="10"/>
+    <add key="serverPort" value="5100"/>
+    <add key="maxConnectionsNum" value="20000"/>
+    <add key="maxWaiteConnectionsNum" value="20000"/>
+    <add key="maxSendTimeout" value="2000"/>
+    <add key="connectionBufferSize" value="32767"/>
+    <add key="httpServersUrl" value="192.168.190.150:5101"/>
+    <add key="httpTimeOut" value="10"/>
+    <add key="faceSavePath" value="D:/MediaService/face/"/>
+    <add key="fileSavePath" value="D:/MediaService/file/"/>
+    <add key="shareSavePath" value="D:/MediaService/share/"/>
+    <add key="cachetime" value="30"/>
+    <add key="turntime" value="30"/>
+    <add key="micover" value="30"/>
+    <add key="neardis" value="50"/>
+    <add key="talk_recordtime" value="60"/>
+    <add key="Verification" value="Verification1234"/>
+    <add key="nearmaxuser" value="20"/>
+    <add key="talk_count" value="5"/>
+    <add key="app_secret" value="9b110e10813890a25926dda992f7d4ec"/>
+    <add key="writeEerrorLog" value="true"/>
+    <add key="registWord" value="golo| |,|元征"/>
+    <add key="ffmpeg" value="D:\MediaService\share\ffmpeg.exe"/>
+    <add key="ClientSettingsProvider.ServiceUri" value=""/>
+    <add key="mongoIP" value="192.168.190.60" />
+    <add key="mongoPort" value="27017" />
+    <add key="mongoDB" value="golo6_action_log" />
+    <add key="mongoUsername" value="golo6" />
+    <add key="mongoPassword" value="12345poiuy" />
+    <!--Memcached服务器地址-->
+    <add key="MemcachedServers" value="192.168.0.54:11211"/>
+  </appSettings>
+  <Proxies>
+    <Proxy ipaddress="127.0.0.1" port="8089"></Proxy>
+    <Proxy ipaddress="192.168.0.2" port="8086"></Proxy>
+    <Proxy ipaddress="59.64.177.58" port="8083"></Proxy>
+  </Proxies>
+</configuration>

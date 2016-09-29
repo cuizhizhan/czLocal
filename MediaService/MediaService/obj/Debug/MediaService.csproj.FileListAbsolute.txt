@@ -1,0 +1,4 @@
+F:\work\MediaService\MediaService\bin\Debug\MediaService.exe.config
+F:\work\MediaService\MediaService\obj\Debug\MediaService.csprojResolveAssemblyReference.cache
+F:\work\MediaService\MediaService\obj\Debug\MediaService.ProjectInstaller.resources
+F:\work\MediaService\MediaService\obj\Debug\MediaService.csproj.GenerateResource.Cache

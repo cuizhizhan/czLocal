@@ -1,0 +1,32 @@
+﻿<?xml version="1.0" encoding="utf-8" ?>
+<configuration>
+    <startup> 
+        <supportedRuntime version="v4.0" sku=".NETFramework,Version=v4.5.1" />
+    </startup>
+    <system.net>
+      <connectionManagement>
+        <add address="*" maxconnection="1024"/>
+      </connectionManagement>
+    </system.net>
+    <connectionStrings>
+      <add name="weiyunDB" providerName="System.Data.SqlClient" connectionString="server=127.0.0.1,1433;User ID=weiyun;Password=1234poiu;database=weiyun"/>
+    </connectionStrings>
+    <appSettings>
+      <add key="serverID" value="10"/>
+      <add key="serverPort" value="5000"/>
+      <add key="maxConnectionsNum" value="10000"/>
+      <add key="maxWaiteConnectionsNum" value="10000"/>
+      <add key="connectionBufferSize" value="10240"/>
+      <add key="httpServersUrl" value="192.168.7.161:5001"/>
+      <add key="httpTimeOut" value="10"/>
+      <add key="faceSavePath" value="D:/weiyunService/face/"/>
+      <add key="fileSavePath" value="D:/weiyunService/file/"/>
+      <add key="shareSavePath" value="D:/weiyunService/share/"/>
+      <add key="cachetime" value="30"/>
+      <add key="turntime" value="30"/>
+      <add key="writeEerrorLog" value="true"/>
+      <add key="registWord" value="golo| |,|元征"/>
+      <add key="ffmpeg" value="D:\weiyunService\share\ffmpeg.exe"/>
+      <add key="ClientSettingsProvider.ServiceUri" value=""/>
+    </appSettings>
+</configuration>

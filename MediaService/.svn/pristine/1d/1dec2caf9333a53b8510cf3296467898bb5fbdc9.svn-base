@@ -1,0 +1,460 @@
+﻿using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Text;
+using System.Web;
+
+namespace MediaService
+{
+    /// <summary>
+    /// 请求车云网数据
+    /// </summary>
+    public static class MyCarAdapter
+    {
+        /// <summary>
+        /// 远端登陆验证(Service端)
+        /// </summary>
+        /// <param name="login_key"></param>
+        /// <param name="password"></param>
+        /// <returns></returns>
+        public static dbscarreturnUser ServiceLogin(string login_key, string password, ref string result)
+        {
+            string str = Utility.HttpRequestRoute("http://base.api.dbscar.com/?action=passport_service.login", "login_key=" + login_key + "&password=" + password + "&app_id=2014042900000006&time=" + Utility.GetTimeStamp(), "POST", Encoding.UTF8);
+            MediaService.WriteLog("登录提交至GOLO:" + str, MediaService.wirtelog);
+            result = str;
+            dbscarreturnUser user = Utility.Deserialize<dbscarreturnUser>(str.Trim());
+            return user;
+        }
+
+        /// <summary>
+        /// 远端登陆验证(App端)
+        /// </summary>
+        /// <param name="login_key"></param>
+        /// <param name="password"></param>
+        /// <param name="app_id"></param>
+        /// <returns></returns>
+        public static dbscarreturnUser AppLogin(string login_key, string password, string app_id, ref string result)
+        {
+            string str = Utility.HttpRequestRoute("http://base.api.dbscar.com/?action=passport_service.login", "login_key=" + login_key + "&password=" + password + "&app_id=" + app_id + "&time=" + Utility.GetTimeStamp(), "POST", Encoding.UTF8);
+            MediaService.WriteLog("登录提交至GOLO:" + str, MediaService.wirtelog);
+            result = str;
+            dbscarreturnUser user = Utility.Deserialize<dbscarreturnUser>(str.Trim());
+            return user;
+        }
+
+        /// <summary>
+        /// 获取远端基础数据
+        /// </summary>
+        /// <param name="uid"></param>
+        /// <returns></returns>
+        public static dbscarBaseInfo GetBaseInfo(int uid)
+        {
+            string tokenlogin = Utility.StringToMD5Hash(DateTime.Now.Ticks.ToString());
+            string poststr = "action=userinfo.get_base_info_car_logo&app_id=2014042900000006&lan=zh&user_id=" + uid + "&ver=3.01";
+            string sign = Utility.StringToMD5Hash(poststr + tokenlogin).ToLower();
+            string str = Utility.HttpRequestRoute("http://base.api.dbscar.com/?action=userinfo.get_base_info_car_logo&app_id=2014042900000006&user_id=" + uid + "&ver=3.01&sign=" + sign, "lan=zh", "POST", Encoding.UTF8); ;
+            MediaService.WriteLog(" RecvThread接收： t=" + str, MediaService.wirtelog);
+            dbscarBaseInfo user = Utility.Deserialize<dbscarBaseInfo>(str.Trim());
+            return user;
+            //{"code":0,"msg":"","data":{"sex":"1","nick_name":"发布锋","signature":"","set_face_time":"0","mobile":"","email":"","user_name":"norhon007","is_bind_email":"0","is_bind_mobile":"0","roles":"0","identity_tag":"","reg_zone":"1","birthday":null,"age":0,"reg_time":"2015-10-29 10:51:10","login_time":"2015-12-28 18:06:05","url":null,"thumb":null,"face_ver":"0","company":"","contact":"","address":"","zipcode":"","qq":"","weixin":"","issue_date":"","expiry_date":"","profession":"","driving_age":"0","tag":"","hobby":"","country":"中国","province":"","city":"","tech":{"user_id":"1776790","tech_level":"0","non_brand":"","brand":[],"wunit":"","wtime":"","experience":"","roles":"0","is_expert":"0","permit":{"url":null,"thumb":"nullm"},"work_address":"","tage":"0","twork":"","country":"{\"s\":143}","repair":null,"repair_addr":null,"tname":null,"tcontact":null,"is_bind":"0","permit_new":[{"url":null,"thumb":"nullm","id":0}]},"review":null,"car_logo_url":[],"car_id":[],"car_series_name":[],"auto_code":[],"point":0,"point_level":0,"driving_tag":"","often_haunt":"","group_car":null,"group_act":[],"emergency":{"sum":0,"m_num":0},"photo":[{"url":null,"thumb":null}],"honor":"0","pub_account":{"pub_id":"","pub_name":""},"qrcode_content":"http:\/\/base.api.dbscar.com\/?action=qrcode_service.run&TVRjM05qYzVNQzh5TURFME1EUXlPVEF3TURBd01EQTJMM3Bv_TWc","company_name":"","company_logo":"","company_phone":"","company_fax":"","company_address":"","apply_status":"-1","public_id":null,"public_name":null,"public_face":null,"public_signature":null,"public_address":null}}
+        }
+
+        /// <summary>
+        /// 请求发送验证码(注册和找回密码用)
+        /// </summary>
+        /// <param name="req_info">手机号/邮箱/用户名（必须存在字母，可以存在数字和下划线）</param>
+        /// <param name="is_check">2图形验证码 3短信验证码|邮箱验证码</param>
+        /// <param name="isres">
+        /// 1--注册检查，如果req_info被注册，抛出错误码110001
+        /// 2--找回密码检查，--如果req_info为邮箱且未被注册，抛出错误码110002，--如果为手机号码且未被绑定，爆出错误码30030
+        /// </param>
+        /// <returns></returns>
+        public static bool VerifyCode_Req_Send_Code(string req_info, string is_check, string isres, ref string result)
+        {
+            Dictionary<string, string> maps = new Dictionary<string, string>();
+            maps.Add("req_info", req_info);
+            maps.Add("is_check", is_check);
+            maps.Add("isres", isres);
+            string url = Utility.CreateLinkString(maps);
+            string str = Utility.HttpRequestRoute("http://base.api.dbscar.com/?action=verifycode.req_send_code", url, "POST", Encoding.UTF8);
+            result = str;
+            MediaService.WriteLog(" RecvThread接收： t=" + str, MediaService.wirtelog);
+            ResponseBaseInfo baseinfo = Utility.Deserialize<ResponseBaseInfo>(str);
+            return baseinfo.code == 0;
+            //{"code":0,"msg":"","data":[]}
+        }
+
+        /// <summary>
+        /// 验证输入的验证码
+        /// </summary>
+        /// <param name="req_info"></param>
+        /// <param name="verify_code"></param>
+        /// <returns></returns>
+        public static bool Verifycode_Verify(string req_info, string verify_code, ref string result)
+        {
+            Dictionary<string, string> maps = new Dictionary<string, string>();
+            maps.Add("req_info", req_info);
+            maps.Add("verify_code", verify_code);
+            string url = Utility.CreateLinkString(maps);
+            string str = Utility.HttpRequestRoute("http://base.api.dbscar.com/?action=verifycode.verify", url, "POST", Encoding.UTF8);
+            result = str;
+            MediaService.WriteLog(" RecvThread接收： t=" + str, MediaService.wirtelog);
+            ResponseBaseInfo baseinfo = Utility.Deserialize<ResponseBaseInfo>(str);
+            return baseinfo.code == 0;
+            //{"code":0,"msg":"","data":[]}
+        }
+
+        /// <summary>
+        /// 注册
+        /// </summary>
+        /// <param name="req_info"></param>
+        /// <param name="is_check"></param>
+        /// <param name="isres"></param>
+        /// <param name="token"></param>
+        /// <returns></returns>
+        public static bool Passport_Service_Register(string app_id, string verify_code, string nick_name, string password, string nation_id, ref string result)
+        {
+            Dictionary<string, string> maps = new Dictionary<string, string>();
+            maps.Add("app_id", app_id);
+            maps.Add("verify_code", verify_code);
+            string url = Utility.CreateLinkString(maps);
+            string str = Utility.HttpRequestRoute("http://base.api.dbscar.com/?action=passport_service.register", url, "POST", Encoding.UTF8); ;
+            result = str;
+            MediaService.WriteLog(" RecvThread接收： t=" + str, MediaService.wirtelog);
+            ResponseBaseInfo baseinfo = Utility.Deserialize<ResponseBaseInfo>(str);
+            return baseinfo.code == 0;
+            //{"code":0,"msg":"","data":[]}
+        }
+
+        /// <summary>
+        /// 找回密码
+        /// </summary>
+        /// <param name="req"></param>
+        /// <param name="pass"></param>
+        /// <param name="confirm_pass"></param>
+        /// <param name="verify_code"></param>
+        /// <param name="result"></param>
+        /// <returns></returns>
+        public static bool Passport_Service_Reset_Pass(string user_id, string app_id, string req, string pass, string confirm_pass, string verify_code, ref string result)
+        {
+            Dictionary<string, string> get = new Dictionary<string, string>();
+            get.Add("action", "verify.reset_pass");
+            get.Add("user_id", user_id);
+            get.Add("ver", "5.0.3");
+            get.Add("app_id", app_id);
+            //maps.Add("lan", "zh");
+            Dictionary<string, string> post = new Dictionary<string, string>();
+            post.Add("req", req);
+            post.Add("pass", pass);
+            post.Add("confirm_pass", confirm_pass);
+            post.Add("verify_code", verify_code);
+            string sign = Utility.GetSign("", get, post);
+            get.Add("sign", sign);
+            string geturl = Utility.CreateLinkString(get);
+            string posturl = Utility.CreateLinkString(post);
+            string str = Utility.HttpRequestRoute("http://base.api.dbscar.com/?" + geturl, posturl, "POST", Encoding.UTF8);
+            result = str;
+            MediaService.WriteLog(" RecvThread接收： t=" + str, MediaService.wirtelog);
+            ResponseBaseInfo baseinfo = Utility.Deserialize<ResponseBaseInfo>(str);
+            return baseinfo.code == 0;
+            //{"code":0,"msg":"","data":[]}
+        }
+
+        /// <summary>
+        /// 用户修改密码
+        /// </summary>
+        /// <param name="user_id"></param>
+        /// <param name="app_id"></param>
+        /// <param name="token"></param>
+        /// <param name="pw"></param>
+        /// <param name="chpw"></param>
+        /// <param name="ver"></param>
+        /// <param name="result"></param>
+        /// <returns></returns>
+        public static bool Userinfo_Set_Password(string user_id, string app_id, string token, string pw, string chpw, string ver, ref string result)
+        {
+            Dictionary<string, string> get = new Dictionary<string, string>();
+            get.Add("action", "userinfo.set_password");
+            get.Add("user_id", user_id);
+            get.Add("ver", "5.0.3");
+            get.Add("app_id", app_id);
+            //maps.Add("lan", "zh");
+            Dictionary<string, string> post = new Dictionary<string, string>();
+            post.Add("pw", pw);
+            post.Add("chpw", chpw);
+            string sign = Utility.GetSign(token, get, post);
+            get.Add("sign", sign);
+            string geturl = Utility.CreateLinkString(get);
+            string posturl = Utility.CreateLinkString(post);
+            string str = Utility.HttpRequestRoute("http://base.api.dbscar.com/?" + geturl, posturl, "POST", Encoding.UTF8);
+            result = str;
+            MediaService.WriteLog(" RecvThread接收： t=" + str, MediaService.wirtelog);
+            ResponseBaseInfo baseinfo = Utility.Deserialize<ResponseBaseInfo>(str);
+            return baseinfo.code == 0;
+            //{"code":0,"msg":"","data":[]}
+        }
+
+        #region 获取省份列表
+        public static bool GetProvince(string user_id, string app_id, string token, string ncode, string ver, ref string result)
+        {
+            Dictionary<string, string> maps = new Dictionary<string, string>();
+            maps.Add("user_id", user_id);
+            maps.Add("app_id", app_id);
+            maps.Add("ncode", ncode);
+            maps.Add("ver", ver);
+            string sign = Utility.GetSign(token, maps);
+            maps.Add("sign", sign);
+            maps.Add("lan", "zh");
+            string url = Utility.CreateLinkString(maps);
+            string str = Utility.HttpRequestRoute("http://base.api.dbscar.com/?action=area.get_province", url, "POST", Encoding.UTF8);
+            result = str;
+            MediaService.WriteLog(" RecvThread接收： t=" + str, MediaService.wirtelog);
+            return CommBusiness.GetJsonValue(result, "code", ",", false).Trim().Equals("0");
+            //{"code":0,"msg":"","data":[]}
+        }
+        #endregion
+
+        #region 获取城市列表
+        public static bool GetCity(string user_id, string app_id, string token, string pcode, string ver, ref string result)
+        {
+            Dictionary<string, string> maps = new Dictionary<string, string>();
+            maps.Add("user_id", user_id);
+            maps.Add("app_id", app_id);
+            maps.Add("pcode", pcode);
+            maps.Add("ver", ver);
+            string sign = Utility.GetSign(token, maps);
+            maps.Add("sign", sign);
+            maps.Add("lan", "zh");
+            string url = Utility.CreateLinkString(maps);
+            string str = Utility.HttpRequestRoute("http://base.api.dbscar.com/?action=area.get_city", url, "POST", Encoding.UTF8);
+            result = str;
+            MediaService.WriteLog(" RecvThread接收： t=" + str, MediaService.wirtelog);
+            return CommBusiness.GetJsonValue(result, "code", ",", false).Trim().Equals("0");
+            //{"code":0,"msg":"","data":[]}
+        }
+        #endregion
+
+        #region 获取区县列表
+        public static bool GetRegion(string user_id, string app_id, string token, string ccode, string ver, ref string result)
+        {
+            Dictionary<string, string> maps = new Dictionary<string, string>();
+            maps.Add("user_id", user_id);
+            maps.Add("app_id", app_id);
+            maps.Add("ccode", ccode);
+            maps.Add("ver", ver);
+            string sign = Utility.GetSign(token, maps);
+            maps.Add("sign", sign);
+            maps.Add("lan", "zh");
+            string url = Utility.CreateLinkString(maps);
+            string str = Utility.HttpRequestRoute("http://base.api.dbscar.com/?action=area.get_region", url, "POST", Encoding.UTF8);
+            result = str;
+            MediaService.WriteLog(" RecvThread接收： t=" + str, MediaService.wirtelog);
+            return CommBusiness.GetJsonValue(result, "code", ",", false).Trim().Equals("0");
+            //{"code":0,"msg":"","data":[]}
+        }
+        #endregion
+
+        #region 收货地址
+
+        #region 获取收货地址
+        /// <summary>
+        /// 获取收货地址
+        /// </summary>
+        /// <param name="user_id"></param>
+        /// <param name="app_id"></param>
+        /// <param name="token"></param>
+        /// <param name="result"></param>
+        /// <param name="ver"></param>
+        /// <returns></returns>
+        public static bool GetAddress(string user_id, string app_id, string token, ref string result)
+        {
+            Dictionary<string, string> get = new Dictionary<string, string>();
+            get.Add("action", "gra.get");
+            get.Add("user_id", user_id);
+            get.Add("ver", "5.0.3");
+            get.Add("app_id", app_id);
+            //maps.Add("lan", "zh");
+            Dictionary<string, string> post = new Dictionary<string, string>();
+            string sign = Utility.GetSign(token, get, post);
+            get.Add("sign", sign);
+            string geturl = Utility.CreateLinkString(get);
+            string posturl = Utility.CreateLinkString(post);
+            string str = Utility.HttpRequestRoute("http://base.api.dbscar.com/?" + geturl, posturl, "POST", Encoding.UTF8);
+            result = str;
+            MediaService.WriteLog(" RecvThread接收： t=" + str, MediaService.wirtelog);
+            ResponseBaseInfo baseinfo = Utility.Deserialize<ResponseBaseInfo>(str);
+            return baseinfo.code == 0;
+            //{"code":0,"msg":"","data":[]}
+        }
+        #endregion
+
+        #region 添加收货地址
+        /// <summary>
+        /// 
+        /// </summary>
+        /// <param name="user_name"></param>
+        /// <param name="house_number"></param>
+        /// <param name="region_2"></param>
+        /// <param name="region_3"></param>
+        /// <param name="region_4"></param>
+        /// <param name="address"></param>
+        /// <param name="mobile"></param>
+        /// <param name="token"></param>
+        /// <returns></returns>
+        public static bool AddAddress(string user_id, string app_id, string token,
+            string user_name, string house_number, string region_2, string region_3, string region_4, string address, string mobile,
+            ref string result)
+        {
+            Dictionary<string, string> get = new Dictionary<string, string>();
+            get.Add("action", "gra.add");
+            get.Add("user_id", user_id);
+            get.Add("ver", "5.0.3");
+            get.Add("app_id", app_id);
+            //maps.Add("lan", "zh");
+            Dictionary<string, string> post = new Dictionary<string, string>();
+            post.Add("user_name", user_name);
+            post.Add("house_number", house_number);
+            post.Add("region_1", "143");
+            post.Add("region_2", region_2);
+            post.Add("region_3", region_3);
+            post.Add("region_4", region_4);
+            post.Add("region_5", "0");
+            post.Add("address", address);
+            post.Add("mobile", mobile);
+            string sign = Utility.GetSign(token, get, post);
+            get.Add("sign", sign);
+            string geturl = Utility.CreateLinkString(get);
+            string posturl = Utility.CreateLinkString(post);
+            string str = Utility.HttpRequestRoute("http://base.api.dbscar.com/?" + geturl, posturl, "POST", Encoding.UTF8);
+            result = str;
+            MediaService.WriteLog(" RecvThread接收： t=" + str, MediaService.wirtelog);
+            ResponseBaseInfo baseinfo = Utility.Deserialize<ResponseBaseInfo>(str);
+            return baseinfo.code == 0;
+            //{"code":0,"msg":"","data":[]}
+        }
+        #endregion
+
+        #region 删除收货地址
+        /// <summary>
+        /// 删除收货地址
+        /// </summary>
+        /// <param name="user_id"></param>
+        /// <param name="app_id"></param>
+        /// <param name="token"></param>
+        /// <param name="result"></param>
+        /// <param name="ver"></param>
+        /// <returns></returns>
+        public static bool DeleteAddress(string user_id, string app_id, string token, string id, ref string result)
+        {
+            Dictionary<string, string> get = new Dictionary<string, string>();
+            get.Add("action", "gra.delete");
+            get.Add("user_id", user_id);
+            get.Add("ver", "5.0.3");
+            get.Add("app_id", app_id);
+            //maps.Add("lan", "zh");
+            Dictionary<string, string> post = new Dictionary<string, string>();
+            post.Add("id", id);
+            string sign = Utility.GetSign(token, get, post);
+            get.Add("sign", sign);
+            string geturl = Utility.CreateLinkString(get);
+            string posturl = Utility.CreateLinkString(post);
+            string str = Utility.HttpRequestRoute("http://base.api.dbscar.com/?" + geturl, posturl, "POST", Encoding.UTF8);
+            result = str;
+            MediaService.WriteLog(" RecvThread接收： t=" + str, MediaService.wirtelog);
+            ResponseBaseInfo baseinfo = Utility.Deserialize<ResponseBaseInfo>(str);
+            return baseinfo.code == 0;
+            //{"code":0,"msg":"","data":[]}
+        }
+        #endregion
+
+        #region 更新收货地址
+        /// <summary>
+        /// 更新收货地址
+        /// </summary>
+        /// <param name="user_id"></param>
+        /// <param name="app_id"></param>
+        /// <param name="token"></param>
+        /// <param name="id">收货表主键id</param>
+        /// <param name="is_default">1默认0非默认</param>
+        /// <param name="user_name">收货人名字</param>
+        /// <param name="mobile">收货人手机号码</param>
+        /// <param name="region_1">1级行政区域编码 如国家</param>
+        /// <param name="region_2">2级行政区域编码 如省</param>
+        /// <param name="region_3">3级行政区域编码 如市</param>
+        /// <param name="region_4">4级行政区域编码 如县|区</param>
+        /// <param name="region_5">5级行政区域编码 如乡|镇</param>
+        /// <param name="address">详细|街道地址</param>
+        /// <param name="result"></param>
+        /// <returns></returns>
+        public static bool UpdateAddress(string user_id, string app_id, string token, string id, bool is_default,
+            string user_name, string mobile, string region_1, string region_2, string region_3, string region_4, string region_5, string address,
+            ref string result)
+        {
+            Dictionary<string, string> get = new Dictionary<string, string>();
+            get.Add("action", "gra.update");
+            get.Add("user_id", user_id);
+            get.Add("ver", "5.0.3");
+            get.Add("app_id", app_id);
+            //maps.Add("lan", "zh");
+            Dictionary<string, string> post = new Dictionary<string, string>();
+            post.Add("id", id);
+            post.Add("user_name", user_name);
+            post.Add("mobile", mobile);
+            post.Add("region_1", region_1);
+            post.Add("region_2", region_2);
+            post.Add("region_3", region_3);
+            post.Add("region_4", region_4);
+            post.Add("region_5", region_5);
+            post.Add("address", address);
+            post.Add("is_default", is_default.ToString());
+            string sign = Utility.GetSign(token, get, post);
+            get.Add("sign", sign);
+            string geturl = Utility.CreateLinkString(get);
+            string posturl = Utility.CreateLinkString(post);
+            string str = Utility.HttpRequestRoute("http://base.api.dbscar.com/?" + geturl, posturl, "POST", Encoding.UTF8);
+            result = str;
+            MediaService.WriteLog(" RecvThread接收： t=" + str, MediaService.wirtelog);
+            ResponseBaseInfo baseinfo = Utility.Deserialize<ResponseBaseInfo>(str);
+            return baseinfo.code == 0;
+            //{"code":0,"msg":"","data":[]}
+        }
+        #endregion
+
+        #region 设置默认地址接口
+        /// <summary>
+        /// 设置默认地址接口
+        /// </summary>
+        /// <param name="user_id"></param>
+        /// <param name="app_id"></param>
+        /// <param name="token"></param>
+        /// <param name="result"></param>
+        /// <param name="is_default"></param>
+        /// <returns></returns>
+        public static bool UpdateAddress(string user_id, string app_id, string token, string id, bool is_default,
+            ref string result)
+        {
+            Dictionary<string, string> get = new Dictionary<string, string>();
+            get.Add("action", "gra.update");
+            get.Add("user_id", user_id);
+            get.Add("ver", "5.0.3");
+            get.Add("app_id", app_id);
+            //maps.Add("lan", "zh");
+            Dictionary<string, string> post = new Dictionary<string, string>();
+            post.Add("id", id);
+            post.Add("is_default", is_default.ToString());
+            string sign = Utility.GetSign(token, get, post);
+            get.Add("sign", sign);
+            string geturl = Utility.CreateLinkString(get);
+            string posturl = Utility.CreateLinkString(post);
+            string str = Utility.HttpRequestRoute("http://base.api.dbscar.com/?" + geturl, posturl, "POST", Encoding.UTF8);
+            result = str;
+            MediaService.WriteLog(" RecvThread接收： t=" + str, MediaService.wirtelog);
+            ResponseBaseInfo baseinfo = Utility.Deserialize<ResponseBaseInfo>(str);
+            return baseinfo.code == 0;
+            //{"code":0,"msg":"","data":[]}
+        }
+        #endregion
+
+        #endregion
+    }
+}
